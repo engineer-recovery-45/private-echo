@@ -1,0 +1,215 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrivateEcho+ Emotion</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+
+    <style>
+        .fade-in {
+            animation: fade 0.4s ease-out;
+        }
+
+        @keyframes fade {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 min-h-screen p-6 text-slate-800 transition-colors" id="body">
+
+    <div class="max-w-3xl mx-auto space-y-8">
+
+        <header class="text-center space-y-2">
+            <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho+</h1>
+            <p class="text-slate-500 text-sm">感情が可視化されるAIボイス日記</p>
+
+            <div class="flex justify-center gap-4 mt-3">
+                <button id="darkToggle" class="text-xs px-3 py-1 border rounded">🌙 Dark</button>
+                <button id="exportBtn" class="text-xs px-3 py-1 border rounded">📁 Markdown Export</button>
+            </div>
+
+            <div id="emotionSummary" class="text-xs text-slate-400 mt-2"></div>
+        </header>
+
+        <section class="bg-white p-6 rounded-2xl shadow-sm border">
+
+            <button id="recordBtn"
+                    class="bg-red-500 text-white px-6 py-3 rounded-full font-bold w-full">
+                録音開始
+            </button>
+
+            <div id="status" class="text-xs text-slate-400 mt-3">Ready</div>
+
+        </section>
+
+        <div id="diaryList" class="space-y-4"></div>
+
+    </div>
+
+    <script type="module">
+import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+
+// ================= DB =================
+const db = new Dexie("DiaryDB");
+db.version(1).stores({
+  entries: '++id, timestamp, text, emotion'
+});
+
+// ================= State =================
+let recorder = null;
+let chunks = [];
+let transcriber = null;
+let isRecording = false;
+
+// ================= Emotion Analyzer =================
+// 軽量ルールベース（高速・完全ローカル）
+function analyzeEmotion(text){
+  const positive = ["嬉しい","楽しい","最高","良い","成功","達成"];
+  const negative = ["辛い","疲れた","最悪","失敗","不安","嫌だ"];
+
+  let score = 0;
+  positive.forEach(w => { if(text.includes(w)) score++; });
+  negative.forEach(w => { if(text.includes(w)) score--; });
+
+  if(score > 0) return "positive";
+  if(score < 0) return "negative";
+  return "neutral";
+}
+
+// ================= Render =================
+async function render(){
+  const entries = await db.entries.orderBy("timestamp").reverse().toArray();
+  const list = document.getElementById("diaryList");
+  list.innerHTML = "";
+
+  if(entries.length === 0){
+    list.innerHTML = `<p class="text-center text-slate-400">まだ日記がありません</p>`;
+    return;
+  }
+
+  let pos=0,neg=0,neu=0;
+
+  entries.forEach(e=>{
+    if(e.emotion==="positive") pos++;
+    if(e.emotion==="negative") neg++;
+    if(e.emotion==="neutral") neu++;
+
+    const color =
+      e.emotion==="positive" ? "bg-green-50 border-green-200" :
+      e.emotion==="negative" ? "bg-red-50 border-red-200" :
+      "bg-slate-50 border-slate-200";
+
+    list.innerHTML += `
+      <div class="p-5 rounded-xl border ${color} fade-in">
+        <div class="text-xs text-slate-400 mb-2">
+          ${new Date(e.timestamp).toLocaleString()}
+          (${e.emotion})
+        </div>
+        <p class="whitespace-pre-wrap">${e.text}</p>
+      </div>
+    `;
+  });
+
+  document.getElementById("emotionSummary").innerText =
+    `今月: 😊${pos}件 / 😐${neu}件 / 😢${neg}件`;
+}
+
+// ================= AI Init =================
+async function initAI(){
+  if(transcriber) return;
+  document.getElementById("status").innerText="AI Loading...";
+  transcriber = await pipeline(
+    'automatic-speech-recognition',
+    'Xenova/whisper-tiny'
+  );
+  document.getElementById("status").innerText="AI Ready ✓";
+}
+
+// ================= Recording =================
+async function startRecording(){
+  await initAI();
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  recorder = new MediaRecorder(stream);
+  chunks=[];
+
+  recorder.ondataavailable = e=> chunks.push(e.data);
+  recorder.onstop = async ()=>{
+    stream.getTracks().forEach(t=>t.stop());
+    const blob = new Blob(chunks,{type:recorder.mimeType});
+    const url = URL.createObjectURL(blob);
+
+    document.getElementById("status").innerText="Transcribing...";
+
+    const result = await transcriber(url,{language:'japanese'});
+    URL.revokeObjectURL(url);
+
+    const emotion = analyzeEmotion(result.text);
+
+    await db.entries.add({
+      timestamp: Date.now(),
+      text: result.text.trim(),
+      emotion
+    });
+
+    document.getElementById("status").innerText="Saved ✓";
+    render();
+  };
+
+  recorder.start();
+  isRecording=true;
+  recordBtn.innerText="停止して保存";
+}
+
+function stopRecording(){
+  recorder.stop();
+  isRecording=false;
+  recordBtn.innerText="録音開始";
+}
+
+// ================= Export =================
+async function exportMarkdown(){
+  const entries = await db.entries.orderBy("timestamp").toArray();
+  let md="# PrivateEcho Diary\n\n";
+
+  entries.forEach(e=>{
+    md+=`## ${new Date(e.timestamp).toLocaleString()} (${e.emotion})\n`;
+    md+=e.text+"\n\n";
+  });
+
+  const blob = new Blob([md],{type:"text/markdown"});
+  const a = document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="diary.md";
+  a.click();
+}
+
+// ================= Dark Mode =================
+darkToggle.onclick=()=>{
+  document.body.classList.toggle("bg-slate-900");
+  document.body.classList.toggle("text-white");
+};
+
+// ================= Events =================
+recordBtn.onclick=()=>{
+  if(isRecording) stopRecording();
+  else startRecording();
+};
+
+exportBtn.onclick=exportMarkdown;
+
+render();
+
+    </script>
+</body>
+</html>
