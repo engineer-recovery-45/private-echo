@@ -258,92 +258,38 @@
         // 6. AIモデルの初期化
         // ============================================
         async function initAI() {
-            if (AppState.isModelLoaded && AppState.transcriber) {
-                return true;
-            }
+            if (AppState.isModelLoaded && AppState.transcriber) return true;
 
             try {
                 setStatus('AIモデルを読込中...');
                 setButtonEnabled(false);
-                showLoading('AIモデルをダウンロード中...');
+                showLoading('AIモデルを準備中...');
 
-                let lastProgress = 0;
-                let downloadStarted = false;
-
-                console.log('モデルの読み込みを開始...');
-
+                // インポート元を @huggingface/transformers に変えるとより安定します
                 AppState.transcriber = await pipeline(
                     'automatic-speech-recognition',
-                    'Xenova/whisper-tiny',
+                    'onnx-community/whisper-tiny.en', // もしくは 'Xenova/whisper-tiny'
                     {
-                        quantized: true,
-                        revision: 'main',
-                        progress_callback: (progress) => {
-                            console.log('Model loading progress:', progress);
-
-                            if (progress.status === 'downloading' || progress.status === 'progress') {
-                                downloadStarted = true;
-
-                                // ファイル名を表示
-                                if (progress.file) {
-                                    elements.loadingText.textContent = `ダウンロード中: ${progress.file}`;
-                                }
-
-                                // プログレスの計算
-                                if (progress.loaded && progress.total) {
-                                    const percent = (progress.loaded / progress.total) * 100;
-                                    lastProgress = percent;
-                                    updateProgress(percent);
-                                } else if (progress.progress !== undefined) {
-                                    lastProgress = progress.progress;
-                                    updateProgress(progress.progress);
-                                }
-                            } else if (progress.status === 'done') {
-                                if (downloadStarted) {
-                                    updateProgress(100);
-                                    elements.loadingText.textContent = 'ダウンロード完了';
-                                }
-                            } else if (progress.status === 'ready') {
-                                elements.loadingText.textContent = 'モデルを初期化中...';
+                        device: 'webgpu', // 可能ならGPUを使う（失敗時は自動でwasmにフォールバックされます）
+                        progress_callback: (p) => {
+                            if (p.status === 'progress') {
+                                updateProgress(p.progress);
                             }
                         }
                     }
                 );
 
                 AppState.isModelLoaded = true;
-
                 hideLoading();
                 setStatus('AI Ready ✓');
                 setButtonEnabled(true);
-                elements.modelInfo.textContent = '🤖 AIモデル (オフライン対応) ✓';
-
-                console.log('モデルの読み込みが完了しました');
                 return true;
-
             } catch (error) {
                 console.error('Model loading error:', error);
-                hideLoading();
-                setStatus('AI読込失敗', true);
-                setButtonEnabled(true);
-
-                let errorMsg = 'AIモデルの読み込みに失敗しました。';
-
-                if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
-                    errorMsg += ' インターネット接続を確認してください。';
-                } else if (error.message.includes('Unsupported')) {
-                    errorMsg += ' このブラウザはAIモデルに対応していません。';
-                } else {
-                    errorMsg += ` エラー: ${error.message}`;
-                }
-
-                showError(errorMsg + ' ブラウザ標準機能をお試しください。');
-
-                // フォールバック: Web Speech APIの選択を提案
-                elements.modelSelection.classList.remove('hidden');
-                return false;
+                // ここで 'Unsupported model type' が出る場合、ライブラリのバージョンを疑ってください
+                throw error;
             }
         }
-
         // ============================================
         // 7. Web Speech APIの初期化
         // ============================================
