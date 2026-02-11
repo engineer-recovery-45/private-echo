@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src https://huggingface.co https://cdn-lfs.huggingface.co; worker-src blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co; worker-src blob:;">
     <title>PrivateEcho - AIボイス日記</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
@@ -76,7 +76,12 @@
     </div>
 
     <script type="module">
-        import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+        // 最新バージョンを使用
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+
+        // Web Workerの設定（オプション：パフォーマンス向上のため）
+        env.allowLocalModels = false;
+        env.allowRemoteModels = true;
 
         // ============================================
         // 1. データベース設定 (Dexie)
@@ -93,7 +98,8 @@
             transcriber: null,
             isRecording: false,
             isProcessing: false,
-            deleteTargetId: null
+            deleteTargetId: null,
+            isModelLoaded: false
         };
 
         // ============================================
@@ -189,35 +195,67 @@
         // 5. AIモデルの初期化
         // ============================================
         async function initAI() {
-            if (AppState.transcriber) return;
+            if (AppState.isModelLoaded && AppState.transcriber) {
+                return;
+            }
 
             try {
                 setStatus('AIモデルを読込中...');
+                setButtonEnabled(false);
                 showLoading('AIモデルをダウンロード中... (初回は数分かかる場合があります)');
 
-                // 日本語対応の多言語モデルを使用
-                // tiny: 約40MB, base: 約70MB, small: 約240MB
+                console.log('モデルの読み込みを開始...');
+
+                // 日本語対応の多言語Whisperモデル
+                // 利用可能なモデル:
+                // - Xenova/whisper-tiny (39MB) - 最軽量、日本語対応
+                // - Xenova/whisper-base (74MB) - より高精度
+                // - Xenova/whisper-small (244MB) - 高精度だが重い
+
                 AppState.transcriber = await pipeline(
                     'automatic-speech-recognition',
-                    'Xenova/whisper-tiny',  // 多言語対応の軽量モデル
+                    'Xenova/whisper-tiny',
                     {
+                        quantized: true,  // 量子化モデルを使用（軽量化）
+                        revision: 'main',
                         progress_callback: (progress) => {
-                            if (progress.status === 'progress') {
-                                const percent = (progress.progress / progress.total) * 100;
-                                updateProgress(percent);
+                            console.log('Progress:', progress);
+                            if (progress.status === 'progress' && progress.total) {
+                                const percent = (progress.loaded / progress.total) * 100;
+                                updateProgress(Math.min(percent, 95));
+                            } else if (progress.status === 'done') {
+                                updateProgress(100);
                             }
                         }
                     }
                 );
 
+                AppState.isModelLoaded = true;
+
                 hideLoading();
                 setStatus('AI Ready ✓');
-                elements.modelInfo.textContent = 'モデル: Whisper Tiny (多言語対応)';
+                setButtonEnabled(true);
+                elements.modelInfo.textContent = 'モデル: Whisper Tiny (多言語対応) ✓';
+
+                console.log('モデルの読み込みが完了しました');
 
             } catch (error) {
+                console.error('Model loading error:', error);
                 hideLoading();
                 setStatus('AI読込失敗', true);
-                showError(`AIモデルの読み込みに失敗しました: ${error.message}`);
+                setButtonEnabled(true);
+
+                let errorMsg = 'AIモデルの読み込みに失敗しました。';
+
+                if (error.message.includes('Failed to fetch')) {
+                    errorMsg += ' インターネット接続を確認してください。';
+                } else if (error.message.includes('Unsupported')) {
+                    errorMsg += ' ブラウザがサポートされていない可能性があります。Chrome/Edge/Firefoxの最新版をお試しください。';
+                } else {
+                    errorMsg += ` (${error.message})`;
+                }
+
+                showError(errorMsg);
                 throw error;
             }
         }
@@ -228,9 +266,16 @@
         async function startRecording() {
             try {
                 // マイクへのアクセス許可を要求
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,  // Whisperに最適なサンプルレート
+                    }
+                });
 
-                AppState.mediaRecorder = new MediaRecorder(stream);
+                AppState.mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
+                });
                 AppState.audioChunks = [];
 
                 AppState.mediaRecorder.ondataavailable = (e) => {
@@ -285,30 +330,48 @@
                     throw new Error('録音データがありません');
                 }
 
-                const audioBlob = new Blob(AppState.audioChunks, { type: 'audio/wav' });
+                const audioBlob = new Blob(AppState.audioChunks, {
+                    type: AppState.audioChunks[0].type
+                });
                 updateProgress(30);
 
-                const audioUrl = URL.createObjectURL(audioBlob);
+                console.log('Audio blob size:', audioBlob.size, 'bytes');
+                console.log('Audio type:', audioBlob.type);
+
+                // Blobを読み込む
+                const arrayBuffer = await audioBlob.arrayBuffer();
+                const audioData = new Uint8Array(arrayBuffer);
+
                 updateProgress(50);
 
-                // AI推論の実行（日本語対応）
-                const result = await AppState.transcriber(audioUrl, {
-                    language: 'japanese',  // 日本語を明示的に指定
-                    task: 'transcribe'
+                // AI推論の実行
+                console.log('Starting transcription...');
+                const result = await AppState.transcriber(audioData, {
+                    language: 'japanese',  // 日本語を指定
+                    task: 'transcribe',
+                    chunk_length_s: 30,
+                    stride_length_s: 5,
+                    return_timestamps: false
                 });
+
+                console.log('Transcription result:', result);
 
                 updateProgress(80);
 
-                // クリーンアップ
-                URL.revokeObjectURL(audioUrl);
-
                 if (!result || !result.text || result.text.trim() === '') {
-                    throw new Error('音声を認識できませんでした。もう一度お試しください。');
+                    throw new Error('音声を認識できませんでした。もう一度はっきりと話してお試しください。');
                 }
 
                 // データの保存
                 await db.entries.add({
-                    date: new Date().toLocaleString('ja-JP'),
+                    date: new Date().toLocaleString('ja-JP', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    }),
                     timestamp: Date.now(),
                     text: result.text.trim()
                 });
@@ -323,6 +386,7 @@
                 setTimeout(() => setStatus('Ready'), 2000);
 
             } catch (error) {
+                console.error('Processing error:', error);
                 showError(`処理エラー: ${error.message}`);
                 setStatus('処理失敗', true);
                 hideLoading();
@@ -425,7 +489,9 @@
             } else {
                 hideError();
                 await initAI();
-                await startRecording();
+                if (AppState.isModelLoaded) {
+                    await startRecording();
+                }
             }
         });
 
@@ -456,7 +522,12 @@
         async function initialize() {
             try {
                 await renderDiaries();
-                setStatus('Ready');
+                setStatus('Ready - 初回利用時はAIモデルのダウンロードが必要です');
+
+                // ブラウザの互換性チェック
+                if (!window.MediaRecorder) {
+                    showError('お使いのブラウザは録音機能に対応していません。Chrome、Edge、Firefox等をお使いください。');
+                }
             } catch (error) {
                 showError(`初期化エラー: ${error.message}`);
             }
