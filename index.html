@@ -17,6 +17,18 @@
             <div id="modelInfo" class="mt-2 text-xs text-slate-400"></div>
         </header>
 
+        <!-- 情報メッセージ表示エリア -->
+        <div id="infoAlert" class="hidden bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg" role="alert">
+            <div class="flex items-start">
+                <span class="text-blue-500 mr-2">ℹ️</span>
+                <div class="flex-1">
+                    <p class="font-bold">お知らせ</p>
+                    <p id="infoMessage" class="text-sm"></p>
+                </div>
+                <button id="closeInfo" class="text-blue-500 hover:text-blue-700 ml-2">&times;</button>
+            </div>
+        </div>
+
         <!-- エラーメッセージ表示エリア -->
         <div id="errorAlert" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg" role="alert">
             <div class="flex items-start">
@@ -50,6 +62,21 @@
                     <div id="progress" class="bg-indigo-500 h-full w-0 transition-all duration-300"></div>
                 </div>
             </div>
+
+            <!-- モデル選択（初回のみ表示） -->
+            <div id="modelSelection" class="mt-4 hidden p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <p class="text-sm text-slate-600 mb-3">文字起こし方法を選択してください：</p>
+                <div class="space-y-2">
+                    <button id="selectAI" class="w-full text-left px-4 py-3 bg-white border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors">
+                        <div class="font-semibold text-indigo-600">🤖 AIモデル（オフライン対応）</div>
+                        <div class="text-xs text-slate-500 mt-1">初回に40MB程度のダウンロードが必要。以降はオフラインで使用可能</div>
+                    </button>
+                    <button id="selectWebSpeech" class="w-full text-left px-4 py-3 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
+                        <div class="font-semibold text-slate-700">🌐 ブラウザ標準機能（要インターネット）</div>
+                        <div class="text-xs text-slate-500 mt-1">ダウンロード不要。常にインターネット接続が必要</div>
+                    </button>
+                </div>
+            </div>
         </section>
 
         <!-- 日記エントリーリスト -->
@@ -76,10 +103,9 @@
     </div>
 
     <script type="module">
-        // 最新バージョンを使用
         import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
 
-        // Web Workerの設定（オプション：パフォーマンス向上のため）
+        // Transformers.jsの設定
         env.allowLocalModels = false;
         env.allowRemoteModels = true;
 
@@ -87,7 +113,10 @@
         // 1. データベース設定 (Dexie)
         // ============================================
         const db = new Dexie("DiaryDB");
-        db.version(1).stores({ entries: '++id, date, text, timestamp' });
+        db.version(2).stores({
+            entries: '++id, date, text, timestamp',
+            settings: 'key, value'
+        });
 
         // ============================================
         // 2. アプリケーション状態管理
@@ -96,10 +125,13 @@
             mediaRecorder: null,
             audioChunks: [],
             transcriber: null,
+            recognition: null,
             isRecording: false,
             isProcessing: false,
             deleteTargetId: null,
-            isModelLoaded: false
+            isModelLoaded: false,
+            transcriptionMethod: null, // 'ai' or 'webspeech'
+            modelLoadProgress: 0
         };
 
         // ============================================
@@ -120,14 +152,31 @@
             errorAlert: document.getElementById('errorAlert'),
             errorMessage: document.getElementById('errorMessage'),
             closeError: document.getElementById('closeError'),
+            infoAlert: document.getElementById('infoAlert'),
+            infoMessage: document.getElementById('infoMessage'),
+            closeInfo: document.getElementById('closeInfo'),
             deleteModal: document.getElementById('deleteModal'),
             confirmDelete: document.getElementById('confirmDelete'),
-            cancelDelete: document.getElementById('cancelDelete')
+            cancelDelete: document.getElementById('cancelDelete'),
+            modelSelection: document.getElementById('modelSelection'),
+            selectAI: document.getElementById('selectAI'),
+            selectWebSpeech: document.getElementById('selectWebSpeech')
         };
 
         // ============================================
         // 4. ユーティリティ関数
         // ============================================
+
+        // 情報表示
+        function showInfo(message) {
+            elements.infoMessage.textContent = message;
+            elements.infoAlert.classList.remove('hidden');
+        }
+
+        // 情報非表示
+        function hideInfo() {
+            elements.infoAlert.classList.add('hidden');
+        }
 
         // エラー表示
         function showError(message) {
@@ -156,8 +205,9 @@
 
         // プログレス更新
         function updateProgress(percent) {
-            elements.progress.style.width = `${percent}%`;
-            elements.loadingPercent.textContent = `${Math.round(percent)}%`;
+            const smoothPercent = Math.min(Math.max(percent, 0), 100);
+            elements.progress.style.width = `${smoothPercent}%`;
+            elements.loadingPercent.textContent = `${Math.round(smoothPercent)}%`;
         }
 
         // ステータス更新
@@ -192,39 +242,69 @@
         }
 
         // ============================================
-        // 5. AIモデルの初期化
+        // 5. 設定の保存・読み込み
+        // ============================================
+        async function saveTranscriptionMethod(method) {
+            await db.settings.put({ key: 'transcriptionMethod', value: method });
+            AppState.transcriptionMethod = method;
+        }
+
+        async function loadTranscriptionMethod() {
+            const setting = await db.settings.get('transcriptionMethod');
+            return setting ? setting.value : null;
+        }
+
+        // ============================================
+        // 6. AIモデルの初期化
         // ============================================
         async function initAI() {
             if (AppState.isModelLoaded && AppState.transcriber) {
-                return;
+                return true;
             }
 
             try {
                 setStatus('AIモデルを読込中...');
                 setButtonEnabled(false);
-                showLoading('AIモデルをダウンロード中... (初回は数分かかる場合があります)');
+                showLoading('AIモデルをダウンロード中...');
+
+                let lastProgress = 0;
+                let downloadStarted = false;
 
                 console.log('モデルの読み込みを開始...');
-
-                // 日本語対応の多言語Whisperモデル
-                // 利用可能なモデル:
-                // - Xenova/whisper-tiny (39MB) - 最軽量、日本語対応
-                // - Xenova/whisper-base (74MB) - より高精度
-                // - Xenova/whisper-small (244MB) - 高精度だが重い
 
                 AppState.transcriber = await pipeline(
                     'automatic-speech-recognition',
                     'Xenova/whisper-tiny',
                     {
-                        quantized: true,  // 量子化モデルを使用（軽量化）
+                        quantized: true,
                         revision: 'main',
                         progress_callback: (progress) => {
-                            console.log('Progress:', progress);
-                            if (progress.status === 'progress' && progress.total) {
-                                const percent = (progress.loaded / progress.total) * 100;
-                                updateProgress(Math.min(percent, 95));
+                            console.log('Model loading progress:', progress);
+
+                            if (progress.status === 'downloading' || progress.status === 'progress') {
+                                downloadStarted = true;
+
+                                // ファイル名を表示
+                                if (progress.file) {
+                                    elements.loadingText.textContent = `ダウンロード中: ${progress.file}`;
+                                }
+
+                                // プログレスの計算
+                                if (progress.loaded && progress.total) {
+                                    const percent = (progress.loaded / progress.total) * 100;
+                                    lastProgress = percent;
+                                    updateProgress(percent);
+                                } else if (progress.progress !== undefined) {
+                                    lastProgress = progress.progress;
+                                    updateProgress(progress.progress);
+                                }
                             } else if (progress.status === 'done') {
-                                updateProgress(100);
+                                if (downloadStarted) {
+                                    updateProgress(100);
+                                    elements.loadingText.textContent = 'ダウンロード完了';
+                                }
+                            } else if (progress.status === 'ready') {
+                                elements.loadingText.textContent = 'モデルを初期化中...';
                             }
                         }
                     }
@@ -235,9 +315,10 @@
                 hideLoading();
                 setStatus('AI Ready ✓');
                 setButtonEnabled(true);
-                elements.modelInfo.textContent = 'モデル: Whisper Tiny (多言語対応) ✓';
+                elements.modelInfo.textContent = '🤖 AIモデル (オフライン対応) ✓';
 
                 console.log('モデルの読み込みが完了しました');
+                return true;
 
             } catch (error) {
                 console.error('Model loading error:', error);
@@ -247,35 +328,62 @@
 
                 let errorMsg = 'AIモデルの読み込みに失敗しました。';
 
-                if (error.message.includes('Failed to fetch')) {
+                if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
                     errorMsg += ' インターネット接続を確認してください。';
                 } else if (error.message.includes('Unsupported')) {
-                    errorMsg += ' ブラウザがサポートされていない可能性があります。Chrome/Edge/Firefoxの最新版をお試しください。';
+                    errorMsg += ' このブラウザはAIモデルに対応していません。';
                 } else {
-                    errorMsg += ` (${error.message})`;
+                    errorMsg += ` エラー: ${error.message}`;
                 }
 
-                showError(errorMsg);
-                throw error;
+                showError(errorMsg + ' ブラウザ標準機能をお試しください。');
+
+                // フォールバック: Web Speech APIの選択を提案
+                elements.modelSelection.classList.remove('hidden');
+                return false;
             }
         }
 
         // ============================================
-        // 6. 録音機能
+        // 7. Web Speech APIの初期化
         // ============================================
-        async function startRecording() {
+        function initWebSpeech() {
             try {
-                // マイクへのアクセス許可を要求
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+                if (!SpeechRecognition) {
+                    throw new Error('お使いのブラウザは音声認識に対応していません');
+                }
+
+                AppState.recognition = new SpeechRecognition();
+                AppState.recognition.lang = 'ja-JP';
+                AppState.recognition.continuous = false;
+                AppState.recognition.interimResults = false;
+                AppState.recognition.maxAlternatives = 1;
+
+                elements.modelInfo.textContent = '🌐 ブラウザ標準機能 (要ネット接続) ✓';
+                setStatus('Ready');
+                return true;
+
+            } catch (error) {
+                showError(`音声認識の初期化に失敗: ${error.message}`);
+                return false;
+            }
+        }
+
+        // ============================================
+        // 8. 録音機能 (AIモデル使用)
+        // ============================================
+        async function startRecordingWithAI() {
+            try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         channelCount: 1,
-                        sampleRate: 16000,  // Whisperに最適なサンプルレート
+                        sampleRate: 16000,
                     }
                 });
 
-                AppState.mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
-                });
+                AppState.mediaRecorder = new MediaRecorder(stream);
                 AppState.audioChunks = [];
 
                 AppState.mediaRecorder.ondataavailable = (e) => {
@@ -285,9 +393,8 @@
                 };
 
                 AppState.mediaRecorder.onstop = async () => {
-                    // ストリームを停止してマイクのアクセスを解放
                     stream.getTracks().forEach(track => track.stop());
-                    await processRecording();
+                    await processRecordingWithAI();
                 };
 
                 AppState.mediaRecorder.onerror = (error) => {
@@ -299,25 +406,11 @@
                 updateButtonState(true);
 
             } catch (error) {
-                if (error.name === 'NotAllowedError') {
-                    showError('マイクへのアクセスが拒否されました。ブラウザの設定を確認してください。');
-                } else if (error.name === 'NotFoundError') {
-                    showError('マイクが見つかりません。デバイスにマイクが接続されているか確認してください。');
-                } else {
-                    showError(`録音の開始に失敗しました: ${error.message}`);
-                }
-                setStatus('録音失敗', true);
+                handleMicrophoneError(error);
             }
         }
 
-        function stopRecording() {
-            if (AppState.mediaRecorder && AppState.mediaRecorder.state === 'recording') {
-                AppState.mediaRecorder.stop();
-                updateButtonState(false);
-            }
-        }
-
-        async function processRecording() {
+        async function processRecordingWithAI() {
             AppState.isProcessing = true;
             setButtonEnabled(false);
 
@@ -335,19 +428,14 @@
                 });
                 updateProgress(30);
 
-                console.log('Audio blob size:', audioBlob.size, 'bytes');
-                console.log('Audio type:', audioBlob.type);
-
-                // Blobを読み込む
                 const arrayBuffer = await audioBlob.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
                 updateProgress(50);
 
-                // AI推論の実行
                 console.log('Starting transcription...');
                 const result = await AppState.transcriber(audioData, {
-                    language: 'japanese',  // 日本語を指定
+                    language: 'japanese',
                     task: 'transcribe',
                     chunk_length_s: 30,
                     stride_length_s: 5,
@@ -355,34 +443,17 @@
                 });
 
                 console.log('Transcription result:', result);
-
                 updateProgress(80);
 
                 if (!result || !result.text || result.text.trim() === '') {
-                    throw new Error('音声を認識できませんでした。もう一度はっきりと話してお試しください。');
+                    throw new Error('音声を認識できませんでした。もう一度お試しください。');
                 }
 
-                // データの保存
-                await db.entries.add({
-                    date: new Date().toLocaleString('ja-JP', {
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit'
-                    }),
-                    timestamp: Date.now(),
-                    text: result.text.trim()
-                });
-
+                await saveEntry(result.text.trim());
                 updateProgress(100);
-                await renderDiaries();
 
                 setStatus('完了！ ✓');
                 hideLoading();
-
-                // 成功のフィードバック
                 setTimeout(() => setStatus('Ready'), 2000);
 
             } catch (error) {
@@ -398,7 +469,110 @@
         }
 
         // ============================================
-        // 7. 日記の表示
+        // 9. 録音機能 (Web Speech API使用)
+        // ============================================
+        function startRecordingWithWebSpeech() {
+            try {
+                AppState.recognition.onstart = () => {
+                    updateButtonState(true);
+                    setStatus('録音中... (話してください)');
+                };
+
+                AppState.recognition.onresult = async (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    console.log('Recognition result:', transcript);
+
+                    if (transcript && transcript.trim()) {
+                        setStatus('保存中...');
+                        await saveEntry(transcript.trim());
+                        setStatus('完了！ ✓');
+                        setTimeout(() => setStatus('Ready'), 2000);
+                    } else {
+                        showError('音声を認識できませんでした');
+                    }
+                };
+
+                AppState.recognition.onerror = (event) => {
+                    console.error('Recognition error:', event.error);
+                    updateButtonState(false);
+
+                    if (event.error === 'no-speech') {
+                        showError('音声が検出されませんでした。もう一度お試しください。');
+                    } else if (event.error === 'network') {
+                        showError('ネットワークエラー。インターネット接続を確認してください。');
+                    } else {
+                        showError(`音声認識エラー: ${event.error}`);
+                    }
+                    setStatus('Ready');
+                };
+
+                AppState.recognition.onend = () => {
+                    updateButtonState(false);
+                    if (!AppState.isProcessing) {
+                        setStatus('Ready');
+                    }
+                };
+
+                AppState.recognition.start();
+
+            } catch (error) {
+                showError(`音声認識の開始に失敗: ${error.message}`);
+            }
+        }
+
+        function stopRecordingWithWebSpeech() {
+            if (AppState.recognition) {
+                AppState.recognition.stop();
+            }
+        }
+
+        // ============================================
+        // 10. 共通の録音制御
+        // ============================================
+        function stopRecording() {
+            if (AppState.transcriptionMethod === 'ai') {
+                if (AppState.mediaRecorder && AppState.mediaRecorder.state === 'recording') {
+                    AppState.mediaRecorder.stop();
+                    updateButtonState(false);
+                }
+            } else if (AppState.transcriptionMethod === 'webspeech') {
+                stopRecordingWithWebSpeech();
+            }
+        }
+
+        function handleMicrophoneError(error) {
+            if (error.name === 'NotAllowedError') {
+                showError('マイクへのアクセスが拒否されました。ブラウザの設定を確認してください。');
+            } else if (error.name === 'NotFoundError') {
+                showError('マイクが見つかりません。デバイスにマイクが接続されているか確認してください。');
+            } else {
+                showError(`録音の開始に失敗しました: ${error.message}`);
+            }
+            setStatus('録音失敗', true);
+        }
+
+        // ============================================
+        // 11. データ保存
+        // ============================================
+        async function saveEntry(text) {
+            await db.entries.add({
+                date: new Date().toLocaleString('ja-JP', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                }),
+                timestamp: Date.now(),
+                text: text
+            });
+
+            await renderDiaries();
+        }
+
+        // ============================================
+        // 12. 日記の表示
         // ============================================
         async function renderDiaries() {
             try {
@@ -429,7 +603,6 @@
                         </div>
                     `).join('');
 
-                // 削除ボタンのイベントリスナーを追加
                 document.querySelectorAll('.delete-btn').forEach(btn => {
                     btn.addEventListener('click', (e) => {
                         const id = parseInt(e.currentTarget.dataset.id);
@@ -442,7 +615,6 @@
             }
         }
 
-        // XSS対策のためのHTMLエスケープ
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -450,7 +622,7 @@
         }
 
         // ============================================
-        // 8. 削除機能
+        // 13. 削除機能
         // ============================================
         function showDeleteModal(id) {
             AppState.deleteTargetId = id;
@@ -477,39 +649,76 @@
         }
 
         // ============================================
-        // 9. イベントリスナーの設定
+        // 14. イベントリスナーの設定
         // ============================================
 
         // 録音ボタン
         elements.recordBtn.addEventListener('click', async () => {
             if (AppState.isProcessing) return;
 
+            // 文字起こし方法が未選択の場合、選択画面を表示
+            if (!AppState.transcriptionMethod) {
+                elements.modelSelection.classList.remove('hidden');
+                showInfo('まず文字起こし方法を選択してください');
+                return;
+            }
+
             if (AppState.isRecording) {
                 stopRecording();
             } else {
                 hideError();
-                await initAI();
-                if (AppState.isModelLoaded) {
-                    await startRecording();
+                hideInfo();
+
+                if (AppState.transcriptionMethod === 'ai') {
+                    if (!AppState.isModelLoaded) {
+                        const success = await initAI();
+                        if (!success) return;
+                    }
+                    await startRecordingWithAI();
+                } else if (AppState.transcriptionMethod === 'webspeech') {
+                    startRecordingWithWebSpeech();
                 }
             }
         });
 
-        // エラーを閉じる
+        // AIモデル選択
+        elements.selectAI.addEventListener('click', async () => {
+            elements.modelSelection.classList.add('hidden');
+            hideInfo();
+            await saveTranscriptionMethod('ai');
+            const success = await initAI();
+            if (success) {
+                showInfo('AIモデルの読み込みが完了しました。録音ボタンを押して開始してください。');
+                setTimeout(hideInfo, 3000);
+            }
+        });
+
+        // Web Speech API選択
+        elements.selectWebSpeech.addEventListener('click', async () => {
+            elements.modelSelection.classList.add('hidden');
+            hideInfo();
+            await saveTranscriptionMethod('webspeech');
+            const success = initWebSpeech();
+            if (success) {
+                showInfo('ブラウザ標準機能を使用します。録音ボタンを押して開始してください。');
+                setTimeout(hideInfo, 3000);
+            }
+        });
+
+        // アラートを閉じる
         elements.closeError.addEventListener('click', hideError);
+        elements.closeInfo.addEventListener('click', hideInfo);
 
         // 削除モーダル
         elements.confirmDelete.addEventListener('click', deleteEntry);
         elements.cancelDelete.addEventListener('click', hideDeleteModal);
 
-        // モーダル外クリックで閉じる
         elements.deleteModal.addEventListener('click', (e) => {
             if (e.target === elements.deleteModal) {
                 hideDeleteModal();
             }
         });
 
-        // ESCキーでモーダルを閉じる
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && !elements.deleteModal.classList.contains('hidden')) {
                 hideDeleteModal();
@@ -517,17 +726,35 @@
         });
 
         // ============================================
-        // 10. 初期化
+        // 15. 初期化
         // ============================================
         async function initialize() {
             try {
                 await renderDiaries();
-                setStatus('Ready - 初回利用時はAIモデルのダウンロードが必要です');
+
+                // 保存された設定を読み込み
+                const savedMethod = await loadTranscriptionMethod();
+
+                if (savedMethod) {
+                    AppState.transcriptionMethod = savedMethod;
+
+                    if (savedMethod === 'ai') {
+                        // バックグラウンドでモデルを読み込み（任意）
+                        setStatus('Ready - AIモデル使用');
+                        elements.modelInfo.textContent = '🤖 AIモデル (初回クリック時に読み込み)';
+                    } else if (savedMethod === 'webspeech') {
+                        initWebSpeech();
+                    }
+                } else {
+                    // 初回起動時: 選択画面を表示
+                    setStatus('Ready - 録音ボタンをクリックして開始');
+                }
 
                 // ブラウザの互換性チェック
-                if (!window.MediaRecorder) {
-                    showError('お使いのブラウザは録音機能に対応していません。Chrome、Edge、Firefox等をお使いください。');
+                if (!window.MediaRecorder && !window.SpeechRecognition && !window.webkitSpeechRecognition) {
+                    showError('お使いのブラウザは音声機能に対応していません。Chrome、Edge、Firefox等の最新版をお使いください。');
                 }
+
             } catch (error) {
                 showError(`初期化エラー: ${error.message}`);
             }
