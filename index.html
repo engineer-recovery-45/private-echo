@@ -3,213 +3,485 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PrivateEcho+ Emotion</title>
-
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src https://huggingface.co https://cdn-lfs.huggingface.co; worker-src blob:;">
+    <title>PrivateEcho - AIボイス日記</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+</head>
+<body class="bg-slate-50 min-h-screen p-4 md:p-8 text-slate-800">
 
-    <style>
-        .fade-in {
-            animation: fade 0.4s ease-out;
+    <div class="max-w-2xl mx-auto space-y-8">
+        <header class="text-center">
+            <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho</h1>
+            <p class="text-slate-500">サーバー送信なし。あなたのデバイス内だけで完結するAI日記</p>
+            <div id="modelInfo" class="mt-2 text-xs text-slate-400"></div>
+        </header>
+
+        <!-- エラーメッセージ表示エリア -->
+        <div id="errorAlert" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg" role="alert">
+            <div class="flex items-start">
+                <span class="text-red-500 mr-2">⚠️</span>
+                <div class="flex-1">
+                    <p class="font-bold">エラーが発生しました</p>
+                    <p id="errorMessage" class="text-sm"></p>
+                </div>
+                <button id="closeError" class="text-red-500 hover:text-red-700 ml-2">&times;</button>
+            </div>
+        </div>
+
+        <section class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <button id="recordBtn"
+                        class="bg-red-500 hover:bg-red-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 w-full sm:w-auto justify-center"
+                        aria-label="録音ボタン">
+                    <span id="recordIcon" class="w-3 h-3 bg-white rounded-full"></span>
+                    <span id="recordText">録音開始</span>
+                </button>
+                <div id="status" class="text-sm text-slate-400 font-mono">Ready</div>
+            </div>
+
+            <!-- プログレスバー -->
+            <div id="loadingBar" class="mt-4 hidden">
+                <div class="flex justify-between text-xs text-slate-500 mb-1">
+                    <span id="loadingText">処理中...</span>
+                    <span id="loadingPercent">0%</span>
+                </div>
+                <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div id="progress" class="bg-indigo-500 h-full w-0 transition-all duration-300"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 日記エントリーリスト -->
+        <div id="diaryList" class="space-y-4" role="list"></div>
+
+        <!-- 空状態 -->
+        <div id="emptyState" class="hidden text-center py-12">
+            <div class="text-6xl mb-4">🎤</div>
+            <p class="text-slate-400">まだ日記がありません</p>
+            <p class="text-slate-400 text-sm mt-2">上の録音ボタンから始めましょう</p>
+        </div>
+    </div>
+
+    <!-- 削除確認モーダル -->
+    <div id="deleteModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg p-6 max-w-sm w-full">
+            <h3 class="text-lg font-bold mb-2">削除の確認</h3>
+            <p class="text-slate-600 mb-4">この日記を削除しますか？この操作は取り消せません。</p>
+            <div class="flex gap-3 justify-end">
+                <button id="cancelDelete" class="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">キャンセル</button>
+                <button id="confirmDelete" class="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600">削除する</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+
+        // ============================================
+        // 1. データベース設定 (Dexie)
+        // ============================================
+        const db = new Dexie("DiaryDB");
+        db.version(1).stores({ entries: '++id, date, text, timestamp' });
+
+        // ============================================
+        // 2. アプリケーション状態管理
+        // ============================================
+        const AppState = {
+            mediaRecorder: null,
+            audioChunks: [],
+            transcriber: null,
+            isRecording: false,
+            isProcessing: false,
+            deleteTargetId: null
+        };
+
+        // ============================================
+        // 3. DOM要素の取得
+        // ============================================
+        const elements = {
+            recordBtn: document.getElementById('recordBtn'),
+            recordText: document.getElementById('recordText'),
+            recordIcon: document.getElementById('recordIcon'),
+            status: document.getElementById('status'),
+            diaryList: document.getElementById('diaryList'),
+            emptyState: document.getElementById('emptyState'),
+            loadingBar: document.getElementById('loadingBar'),
+            progress: document.getElementById('progress'),
+            loadingText: document.getElementById('loadingText'),
+            loadingPercent: document.getElementById('loadingPercent'),
+            modelInfo: document.getElementById('modelInfo'),
+            errorAlert: document.getElementById('errorAlert'),
+            errorMessage: document.getElementById('errorMessage'),
+            closeError: document.getElementById('closeError'),
+            deleteModal: document.getElementById('deleteModal'),
+            confirmDelete: document.getElementById('confirmDelete'),
+            cancelDelete: document.getElementById('cancelDelete')
+        };
+
+        // ============================================
+        // 4. ユーティリティ関数
+        // ============================================
+
+        // エラー表示
+        function showError(message) {
+            elements.errorMessage.textContent = message;
+            elements.errorAlert.classList.remove('hidden');
+            console.error('Error:', message);
         }
 
-        @keyframes fade {
+        // エラー非表示
+        function hideError() {
+            elements.errorAlert.classList.add('hidden');
+        }
+
+        // ローディング表示
+        function showLoading(text = '処理中...') {
+            elements.loadingBar.classList.remove('hidden');
+            elements.loadingText.textContent = text;
+            updateProgress(0);
+        }
+
+        // ローディング非表示
+        function hideLoading() {
+            elements.loadingBar.classList.add('hidden');
+            updateProgress(0);
+        }
+
+        // プログレス更新
+        function updateProgress(percent) {
+            elements.progress.style.width = `${percent}%`;
+            elements.loadingPercent.textContent = `${Math.round(percent)}%`;
+        }
+
+        // ステータス更新
+        function setStatus(text, isError = false) {
+            elements.status.textContent = text;
+            elements.status.className = isError
+                ? 'text-sm text-red-500 font-mono'
+                : 'text-sm text-slate-400 font-mono';
+        }
+
+        // ボタン状態更新
+        function updateButtonState(isRecording) {
+            AppState.isRecording = isRecording;
+
+            if (isRecording) {
+                elements.recordBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                elements.recordBtn.classList.add('bg-slate-600', 'hover:bg-slate-700');
+                elements.recordText.textContent = '停止して保存';
+                elements.recordIcon.classList.add('animate-pulse');
+                setStatus('録音中...');
+            } else {
+                elements.recordBtn.classList.remove('bg-slate-600', 'hover:bg-slate-700');
+                elements.recordBtn.classList.add('bg-red-500', 'hover:bg-red-600');
+                elements.recordText.textContent = '録音開始';
+                elements.recordIcon.classList.remove('animate-pulse');
+            }
+        }
+
+        // ボタンの有効/無効切り替え
+        function setButtonEnabled(enabled) {
+            elements.recordBtn.disabled = !enabled;
+        }
+
+        // ============================================
+        // 5. AIモデルの初期化
+        // ============================================
+        async function initAI() {
+            if (AppState.transcriber) return;
+
+            try {
+                setStatus('AIモデルを読込中...');
+                showLoading('AIモデルをダウンロード中... (初回は数分かかる場合があります)');
+
+                // 日本語対応の多言語モデルを使用
+                // tiny: 約40MB, base: 約70MB, small: 約240MB
+                AppState.transcriber = await pipeline(
+                    'automatic-speech-recognition',
+                    'Xenova/whisper-tiny',  // 多言語対応の軽量モデル
+                    {
+                        progress_callback: (progress) => {
+                            if (progress.status === 'progress') {
+                                const percent = (progress.progress / progress.total) * 100;
+                                updateProgress(percent);
+                            }
+                        }
+                    }
+                );
+
+                hideLoading();
+                setStatus('AI Ready ✓');
+                elements.modelInfo.textContent = 'モデル: Whisper Tiny (多言語対応)';
+
+            } catch (error) {
+                hideLoading();
+                setStatus('AI読込失敗', true);
+                showError(`AIモデルの読み込みに失敗しました: ${error.message}`);
+                throw error;
+            }
+        }
+
+        // ============================================
+        // 6. 録音機能
+        // ============================================
+        async function startRecording() {
+            try {
+                // マイクへのアクセス許可を要求
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                AppState.mediaRecorder = new MediaRecorder(stream);
+                AppState.audioChunks = [];
+
+                AppState.mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) {
+                        AppState.audioChunks.push(e.data);
+                    }
+                };
+
+                AppState.mediaRecorder.onstop = async () => {
+                    // ストリームを停止してマイクのアクセスを解放
+                    stream.getTracks().forEach(track => track.stop());
+                    await processRecording();
+                };
+
+                AppState.mediaRecorder.onerror = (error) => {
+                    showError(`録音エラー: ${error.message}`);
+                    stopRecording();
+                };
+
+                AppState.mediaRecorder.start();
+                updateButtonState(true);
+
+            } catch (error) {
+                if (error.name === 'NotAllowedError') {
+                    showError('マイクへのアクセスが拒否されました。ブラウザの設定を確認してください。');
+                } else if (error.name === 'NotFoundError') {
+                    showError('マイクが見つかりません。デバイスにマイクが接続されているか確認してください。');
+                } else {
+                    showError(`録音の開始に失敗しました: ${error.message}`);
+                }
+                setStatus('録音失敗', true);
+            }
+        }
+
+        function stopRecording() {
+            if (AppState.mediaRecorder && AppState.mediaRecorder.state === 'recording') {
+                AppState.mediaRecorder.stop();
+                updateButtonState(false);
+            }
+        }
+
+        async function processRecording() {
+            AppState.isProcessing = true;
+            setButtonEnabled(false);
+
+            try {
+                setStatus('文字起こし中...');
+                showLoading('音声を処理中...');
+                updateProgress(10);
+
+                if (AppState.audioChunks.length === 0) {
+                    throw new Error('録音データがありません');
+                }
+
+                const audioBlob = new Blob(AppState.audioChunks, { type: 'audio/wav' });
+                updateProgress(30);
+
+                const audioUrl = URL.createObjectURL(audioBlob);
+                updateProgress(50);
+
+                // AI推論の実行（日本語対応）
+                const result = await AppState.transcriber(audioUrl, {
+                    language: 'japanese',  // 日本語を明示的に指定
+                    task: 'transcribe'
+                });
+
+                updateProgress(80);
+
+                // クリーンアップ
+                URL.revokeObjectURL(audioUrl);
+
+                if (!result || !result.text || result.text.trim() === '') {
+                    throw new Error('音声を認識できませんでした。もう一度お試しください。');
+                }
+
+                // データの保存
+                await db.entries.add({
+                    date: new Date().toLocaleString('ja-JP'),
+                    timestamp: Date.now(),
+                    text: result.text.trim()
+                });
+
+                updateProgress(100);
+                await renderDiaries();
+
+                setStatus('完了！ ✓');
+                hideLoading();
+
+                // 成功のフィードバック
+                setTimeout(() => setStatus('Ready'), 2000);
+
+            } catch (error) {
+                showError(`処理エラー: ${error.message}`);
+                setStatus('処理失敗', true);
+                hideLoading();
+            } finally {
+                AppState.isProcessing = false;
+                setButtonEnabled(true);
+                AppState.audioChunks = [];
+            }
+        }
+
+        // ============================================
+        // 7. 日記の表示
+        // ============================================
+        async function renderDiaries() {
+            try {
+                const entries = await db.entries.orderBy('timestamp').reverse().toArray();
+
+                if (entries.length === 0) {
+                    elements.diaryList.classList.add('hidden');
+                    elements.emptyState.classList.remove('hidden');
+                    return;
+                }
+
+                elements.diaryList.classList.remove('hidden');
+                elements.emptyState.classList.add('hidden');
+
+                elements.diaryList.innerHTML = entries.map(entry => `
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-100 animate-fade-in hover:shadow-md transition-shadow" role="listitem">
+                            <div class="flex justify-between items-start mb-3">
+                                <div class="text-xs text-slate-400">${escapeHtml(entry.date)}</div>
+                                <button
+                                    class="delete-btn text-slate-400 hover:text-red-500 transition-colors p-1"
+                                    data-id="${entry.id}"
+                                    aria-label="削除"
+                                    title="削除">
+                                    🗑️
+                                </button>
+                            </div>
+                            <p class="text-slate-700 leading-relaxed whitespace-pre-wrap">${escapeHtml(entry.text)}</p>
+                        </div>
+                    `).join('');
+
+                // 削除ボタンのイベントリスナーを追加
+                document.querySelectorAll('.delete-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const id = parseInt(e.currentTarget.dataset.id);
+                        showDeleteModal(id);
+                    });
+                });
+
+            } catch (error) {
+                showError(`日記の表示に失敗しました: ${error.message}`);
+            }
+        }
+
+        // XSS対策のためのHTMLエスケープ
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ============================================
+        // 8. 削除機能
+        // ============================================
+        function showDeleteModal(id) {
+            AppState.deleteTargetId = id;
+            elements.deleteModal.classList.remove('hidden');
+        }
+
+        function hideDeleteModal() {
+            AppState.deleteTargetId = null;
+            elements.deleteModal.classList.add('hidden');
+        }
+
+        async function deleteEntry() {
+            if (AppState.deleteTargetId === null) return;
+
+            try {
+                await db.entries.delete(AppState.deleteTargetId);
+                await renderDiaries();
+                hideDeleteModal();
+                setStatus('削除しました');
+                setTimeout(() => setStatus('Ready'), 2000);
+            } catch (error) {
+                showError(`削除に失敗しました: ${error.message}`);
+            }
+        }
+
+        // ============================================
+        // 9. イベントリスナーの設定
+        // ============================================
+
+        // 録音ボタン
+        elements.recordBtn.addEventListener('click', async () => {
+            if (AppState.isProcessing) return;
+
+            if (AppState.isRecording) {
+                stopRecording();
+            } else {
+                hideError();
+                await initAI();
+                await startRecording();
+            }
+        });
+
+        // エラーを閉じる
+        elements.closeError.addEventListener('click', hideError);
+
+        // 削除モーダル
+        elements.confirmDelete.addEventListener('click', deleteEntry);
+        elements.cancelDelete.addEventListener('click', hideDeleteModal);
+
+        // モーダル外クリックで閉じる
+        elements.deleteModal.addEventListener('click', (e) => {
+            if (e.target === elements.deleteModal) {
+                hideDeleteModal();
+            }
+        });
+
+        // ESCキーでモーダルを閉じる
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !elements.deleteModal.classList.contains('hidden')) {
+                hideDeleteModal();
+            }
+        });
+
+        // ============================================
+        // 10. 初期化
+        // ============================================
+        async function initialize() {
+            try {
+                await renderDiaries();
+                setStatus('Ready');
+            } catch (error) {
+                showError(`初期化エラー: ${error.message}`);
+            }
+        }
+
+        // アプリケーション起動
+        initialize();
+    </script>
+
+    <style>
+        @keyframes fade-in {
             from {
                 opacity: 0;
-                transform: translateY(8px);
+                transform: translateY(10px);
             }
 
             to {
                 opacity: 1;
+                transform: translateY(0);
             }
         }
+
+        .animate-fade-in {
+            animation: fade-in 0.4s ease-out forwards;
+        }
     </style>
-</head>
-
-<body class="bg-slate-50 min-h-screen p-6 text-slate-800 transition-colors" id="body">
-
-    <div class="max-w-3xl mx-auto space-y-8">
-
-        <header class="text-center space-y-2">
-            <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho+</h1>
-            <p class="text-slate-500 text-sm">感情が可視化されるAIボイス日記</p>
-
-            <div class="flex justify-center gap-4 mt-3">
-                <button id="darkToggle" class="text-xs px-3 py-1 border rounded">🌙 Dark</button>
-                <button id="exportBtn" class="text-xs px-3 py-1 border rounded">📁 Markdown Export</button>
-            </div>
-
-            <div id="emotionSummary" class="text-xs text-slate-400 mt-2"></div>
-        </header>
-
-        <section class="bg-white p-6 rounded-2xl shadow-sm border">
-
-            <button id="recordBtn"
-                    class="bg-red-500 text-white px-6 py-3 rounded-full font-bold w-full">
-                録音開始
-            </button>
-
-            <div id="status" class="text-xs text-slate-400 mt-3">Ready</div>
-
-        </section>
-
-        <div id="diaryList" class="space-y-4"></div>
-
-    </div>
-
-    <script type="module">
-import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
-
-// ================= DB =================
-const db = new Dexie("DiaryDB");
-db.version(1).stores({
-  entries: '++id, timestamp, text, emotion'
-});
-
-// ================= State =================
-let recorder = null;
-let chunks = [];
-let transcriber = null;
-let isRecording = false;
-
-// ================= Emotion Analyzer =================
-// 軽量ルールベース（高速・完全ローカル）
-function analyzeEmotion(text){
-  const positive = ["嬉しい","楽しい","最高","良い","成功","達成"];
-  const negative = ["辛い","疲れた","最悪","失敗","不安","嫌だ"];
-
-  let score = 0;
-  positive.forEach(w => { if(text.includes(w)) score++; });
-  negative.forEach(w => { if(text.includes(w)) score--; });
-
-  if(score > 0) return "positive";
-  if(score < 0) return "negative";
-  return "neutral";
-}
-
-// ================= Render =================
-async function render(){
-  const entries = await db.entries.orderBy("timestamp").reverse().toArray();
-  const list = document.getElementById("diaryList");
-  list.innerHTML = "";
-
-  if(entries.length === 0){
-    list.innerHTML = `<p class="text-center text-slate-400">まだ日記がありません</p>`;
-    return;
-  }
-
-  let pos=0,neg=0,neu=0;
-
-  entries.forEach(e=>{
-    if(e.emotion==="positive") pos++;
-    if(e.emotion==="negative") neg++;
-    if(e.emotion==="neutral") neu++;
-
-    const color =
-      e.emotion==="positive" ? "bg-green-50 border-green-200" :
-      e.emotion==="negative" ? "bg-red-50 border-red-200" :
-      "bg-slate-50 border-slate-200";
-
-    list.innerHTML += `
-      <div class="p-5 rounded-xl border ${color} fade-in">
-        <div class="text-xs text-slate-400 mb-2">
-          ${new Date(e.timestamp).toLocaleString()}
-          (${e.emotion})
-        </div>
-        <p class="whitespace-pre-wrap">${e.text}</p>
-      </div>
-    `;
-  });
-
-  document.getElementById("emotionSummary").innerText =
-    `今月: 😊${pos}件 / 😐${neu}件 / 😢${neg}件`;
-}
-
-// ================= AI Init =================
-async function initAI(){
-  if(transcriber) return;
-  document.getElementById("status").innerText="AI Loading...";
-  transcriber = await pipeline(
-    'automatic-speech-recognition',
-    'Xenova/whisper-tiny'
-  );
-  document.getElementById("status").innerText="AI Ready ✓";
-}
-
-// ================= Recording =================
-async function startRecording(){
-  await initAI();
-  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-  recorder = new MediaRecorder(stream);
-  chunks=[];
-
-  recorder.ondataavailable = e=> chunks.push(e.data);
-  recorder.onstop = async ()=>{
-    stream.getTracks().forEach(t=>t.stop());
-    const blob = new Blob(chunks,{type:recorder.mimeType});
-    const url = URL.createObjectURL(blob);
-
-    document.getElementById("status").innerText="Transcribing...";
-
-    const result = await transcriber(url,{language:'japanese'});
-    URL.revokeObjectURL(url);
-
-    const emotion = analyzeEmotion(result.text);
-
-    await db.entries.add({
-      timestamp: Date.now(),
-      text: result.text.trim(),
-      emotion
-    });
-
-    document.getElementById("status").innerText="Saved ✓";
-    render();
-  };
-
-  recorder.start();
-  isRecording=true;
-  recordBtn.innerText="停止して保存";
-}
-
-function stopRecording(){
-  recorder.stop();
-  isRecording=false;
-  recordBtn.innerText="録音開始";
-}
-
-// ================= Export =================
-async function exportMarkdown(){
-  const entries = await db.entries.orderBy("timestamp").toArray();
-  let md="# PrivateEcho Diary\n\n";
-
-  entries.forEach(e=>{
-    md+=`## ${new Date(e.timestamp).toLocaleString()} (${e.emotion})\n`;
-    md+=e.text+"\n\n";
-  });
-
-  const blob = new Blob([md],{type:"text/markdown"});
-  const a = document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="diary.md";
-  a.click();
-}
-
-// ================= Dark Mode =================
-darkToggle.onclick=()=>{
-  document.body.classList.toggle("bg-slate-900");
-  document.body.classList.toggle("text-white");
-};
-
-// ================= Events =================
-recordBtn.onclick=()=>{
-  if(isRecording) stopRecording();
-  else startRecording();
-};
-
-exportBtn.onclick=exportMarkdown;
-
-render();
-
-    </script>
 </body>
 </html>
