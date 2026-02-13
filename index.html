@@ -1,374 +1,162 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PrivateEcho+ Emotion</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PrivateEcho - AI Voice Diary</title>
+
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
-  body { font-family: 'Noto Sans JP', sans-serif; }
-  .fade-in { animation: fade 0.4s ease-out; }
-  @keyframes fade { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:translateY(0);} }
-  .recording-pulse { animation: pulse 1.2s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
-  .dark-mode { background-color: #0f172a !important; color: #e2e8f0 !important; }
-  .dark-mode .card { background-color: #1e293b !important; border-color: #334155 !important; }
-  .dark-mode .text-slate-400 { color: #94a3b8 !important; }
-  .dark-mode .text-slate-500 { color: #94a3b8 !important; }
-  .loader {
-    width: 18px; height: 18px;
-    border: 2px solid #e2e8f0;
-    border-top-color: #6366f1;
-    border-radius: 50%;
-    display: inline-block;
-    animation: spin 0.7s linear infinite;
-    vertical-align: middle;
-    margin-right: 6px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #111;
+  color: white;
+  text-align: center;
+  padding: 40px;
+}
+
+button {
+  padding: 15px 30px;
+  font-size: 18px;
+  border: none;
+  border-radius: 10px;
+  margin: 10px;
+  cursor: pointer;
+}
+
+#record { background: #e63946; color: white; }
+#stop { background: #457b9d; color: white; }
+
+textarea {
+  width: 90%;
+  max-width: 600px;
+  height: 200px;
+  margin-top: 30px;
+  padding: 15px;
+  border-radius: 10px;
+  border: none;
+  font-size: 16px;
+}
+
+#status {
+  margin-top: 20px;
+  font-size: 14px;
+  opacity: 0.7;
+}
 </style>
 </head>
+<body>
 
-<body class="bg-slate-50 min-h-screen p-6 text-slate-800 transition-colors" id="body">
+<h1>🎤 PrivateEcho</h1>
+<p>AI Voice Diary（高精度版）</p>
 
-<div class="max-w-3xl mx-auto space-y-8">
+<button id="record">録音開始</button>
+<button id="stop" disabled>停止</button>
 
-  <header class="text-center space-y-2">
-    <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho+</h1>
-    <p class="text-slate-500 text-sm">感情が可視化されるAIボイス日記</p>
+<div id="status">モデル未ロード</div>
+<textarea id="output" placeholder="ここに文字起こし結果が表示されます"></textarea>
 
-    <div class="flex justify-center gap-4 mt-3">
-      <button id="darkToggle" class="text-xs px-3 py-1 border rounded hover:bg-slate-100 transition-colors">🌙 Dark</button>
-      <button id="exportBtn" class="text-xs px-3 py-1 border rounded hover:bg-slate-100 transition-colors">📁 Markdown Export</button>
-    </div>
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
 
-    <div id="emotionSummary" class="text-xs text-slate-400 mt-2"></div>
-  </header>
+let recorder;
+let chunks = [];
+let transcriber;
+let isModelLoading = false;
 
-  <section class="card bg-white p-6 rounded-2xl shadow-sm border space-y-4">
+const recordBtn = document.getElementById("record");
+const stopBtn = document.getElementById("stop");
+const output = document.getElementById("output");
+const statusText = document.getElementById("status");
 
-    <!-- AI モデル選択 -->
-    <div class="flex items-center gap-3">
-      <label class="text-sm font-medium text-slate-600 whitespace-nowrap">モデル:</label>
-      <select id="modelSelect" class="text-sm border rounded px-2 py-1 flex-1">
-        <option value="Xenova/whisper-tiny">whisper-tiny（高速・低精度）</option>
-        <option value="Xenova/whisper-base">whisper-base（バランス型）</option>
-        <option value="Xenova/whisper-small">whisper-small（高精度・低速）</option>
-      </select>
-      <button id="loadModelBtn" class="text-xs px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 transition-colors">
-        読み込み
-      </button>
-    </div>
+async function loadModel() {
+  if (transcriber || isModelLoading) return;
+  isModelLoading = true;
+  statusText.textContent = "モデル読み込み中（初回は1〜2分）...";
 
-    <button id="recordBtn"
-      class="bg-red-500 text-white px-6 py-3 rounded-full font-bold w-full hover:bg-red-600 transition-colors disabled:opacity-50"
-      disabled>
-      🎙 録音開始
-    </button>
+  transcriber = await pipeline(
+    "automatic-speech-recognition",
+    "Xenova/whisper-small",
+    {
+      quantized: true,
+      chunk_length_s: 30,
+      stride_length_s: 5
+    }
+  );
 
-    <div id="status" class="text-xs text-slate-400 text-center">モデルを読み込んでください</div>
-
-    <!-- 手動入力フォールバック -->
-    <details class="text-xs text-slate-400">
-      <summary class="cursor-pointer hover:text-slate-600">✏️ テキストで直接入力（マイクが使えない場合）</summary>
-      <div class="mt-3 space-y-2">
-        <textarea id="manualText" rows="3"
-          class="w-full border rounded p-2 text-sm text-slate-700 resize-none"
-          placeholder="日記の内容を入力..."></textarea>
-        <button id="manualSaveBtn"
-          class="text-xs px-4 py-2 bg-slate-600 text-white rounded hover:bg-slate-700 transition-colors">
-          保存
-        </button>
-      </div>
-    </details>
-
-  </section>
-
-  <div id="diaryList" class="space-y-4"></div>
-
-</div>
-
-<script>
-// ================= DB =================
-const db = new Dexie("DiaryDB_v2");
-db.version(1).stores({
-  entries: '++id, timestamp, text, emotion'
-});
-
-// ================= State =================
-let recorder   = null;
-let chunks     = [];
-let transcriber = null;
-let isRecording = false;
-let aiReady    = false;
-let isDark     = false;
-
-// ================= DOM refs =================
-const recordBtn   = document.getElementById("recordBtn");
-const loadModelBtn = document.getElementById("loadModelBtn");
-const modelSelect  = document.getElementById("modelSelect");
-const statusEl    = document.getElementById("status");
-const darkToggle  = document.getElementById("darkToggle");
-const exportBtn   = document.getElementById("exportBtn");
-const manualSaveBtn = document.getElementById("manualSaveBtn");
-const manualText  = document.getElementById("manualText");
-
-// ================= Emotion =================
-function analyzeEmotion(text) {
-  const positive = ["嬉しい","楽しい","最高","良い","成功","達成","好き","幸せ","ありがとう","素晴らしい"];
-  const negative = ["辛い","疲れた","最悪","失敗","不安","嫌だ","悲しい","怖い","痛い","苦しい","ダメ"];
-  let score = 0;
-  positive.forEach(w => { if (text.includes(w)) score++; });
-  negative.forEach(w => { if (text.includes(w)) score--; });
-  if (score > 0) return "positive";
-  if (score < 0) return "negative";
-  return "neutral";
+  statusText.textContent = "モデルロード完了";
 }
 
-// ================= Render =================
-async function render() {
-  const entries = await db.entries.orderBy("timestamp").reverse().toArray();
-  const list = document.getElementById("diaryList");
-  list.innerHTML = "";
+recordBtn.onclick = async () => {
+  await loadModel();
 
-  if (entries.length === 0) {
-    list.innerHTML = `<p class="text-center text-slate-400 py-8">まだ日記がありません</p>`;
-    return;
-  }
-
-  let pos = 0, neg = 0, neu = 0;
-
-  entries.forEach(e => {
-    if (e.emotion === "positive") pos++;
-    else if (e.emotion === "negative") neg++;
-    else neu++;
-
-    const emojiMap = { positive:"😊", negative:"😢", neutral:"😐" };
-    const colorMap = {
-      positive: "bg-green-50 border-green-200",
-      negative: "bg-red-50 border-red-200",
-      neutral:  "bg-slate-50 border-slate-200"
-    };
-    const color = colorMap[e.emotion] || colorMap.neutral;
-
-    const card = document.createElement("div");
-    card.className = `card p-5 rounded-xl border ${color} fade-in`;
-    card.innerHTML = `
-      <div class="flex justify-between items-start mb-2">
-        <span class="text-xs text-slate-400">${new Date(e.timestamp).toLocaleString("ja-JP")}</span>
-        <span class="text-lg">${emojiMap[e.emotion] || "😐"}</span>
-      </div>
-      <p class="whitespace-pre-wrap text-sm leading-relaxed">${escapeHtml(e.text)}</p>
-      <button class="mt-3 text-xs text-red-400 hover:text-red-600" data-id="${e.id}">🗑 削除</button>
-    `;
-    card.querySelector("button").onclick = () => deleteEntry(e.id);
-    list.appendChild(card);
-  });
-
-  document.getElementById("emotionSummary").innerText =
-    `記録: 😊${pos}件 / 😐${neu}件 / 😢${neg}件`;
-}
-
-function escapeHtml(str) {
-  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-}
-
-async function deleteEntry(id) {
-  if (!confirm("この日記を削除しますか？")) return;
-  await db.entries.delete(id);
-  render();
-}
-
-// ================= AI Init =================
-async function initAI() {
-  const modelName = modelSelect.value;
-  loadModelBtn.disabled = true;
-  loadModelBtn.innerHTML = '<span class="loader"></span>読込中...';
-  setStatus("🔄 モデルをダウンロード中... (初回は数分かかります)");
-  recordBtn.disabled = true;
-
-  try {
-    // Dynamic import を try-catch で安全に実行
-    const { pipeline, env } = await import(
-      'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js'
-    );
-
-    // ブラウザのメインスレッドで実行（Worker不要）
-    env.allowLocalModels = false;
-    env.useBrowserCache  = true;
-
-    transcriber = await pipeline(
-      'automatic-speech-recognition',
-      modelName,
-      { quantized: true }
-    );
-
-    aiReady = true;
-    recordBtn.disabled = false;
-    setStatus("✅ AI Ready — 録音を開始できます");
-    loadModelBtn.innerHTML = "✅ 完了";
-  } catch (err) {
-    console.error("AI Load Error:", err);
-    setStatus(`❌ モデル読み込みエラー: ${err.message}`);
-    loadModelBtn.disabled = false;
-    loadModelBtn.innerHTML = "再試行";
-    alert(`モデルの読み込みに失敗しました。\n\n原因: ${err.message}\n\n代わりにテキスト入力をご利用ください。`);
-  }
-}
-
-// ================= Recording =================
-async function startRecording() {
-  if (!aiReady) {
-    alert("先にモデルを読み込んでください");
-    return;
-  }
-
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    alert(`マイクへのアクセスが拒否されました。\nブラウザの設定を確認してください。\n\nエラー: ${err.message}`);
-    return;
-  }
-
-  // サポートされているmimeTypeを選択
-  const mimeType = getSupportedMimeType();
-  recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  recorder = new MediaRecorder(stream);
   chunks = [];
 
-  recorder.ondataavailable = e => {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
+  recorder.ondataavailable = e => chunks.push(e.data);
 
   recorder.onstop = async () => {
-    stream.getTracks().forEach(t => t.stop());
+    statusText.textContent = "音声処理中...";
 
-    if (chunks.length === 0) {
-      setStatus("⚠️ 音声データがありません");
-      return;
+    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const arrayBuffer = await blob.arrayBuffer();
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: 16000
+    });
+
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    // モノラル取得
+    let channelData = audioBuffer.getChannelData(0);
+
+    // 正規化
+    let max = 0;
+    for (let i = 0; i < channelData.length; i++) {
+      max = Math.max(max, Math.abs(channelData[i]));
     }
-
-    setStatus("🔄 文字起こし中...");
-
-    try {
-      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      const arrayBuffer = await blob.arrayBuffer();
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-      // Float32Array に変換（Whisperが要求する形式）
-      const channelData = audioBuffer.getChannelData(0);
-
-      const result = await transcriber(channelData, {
-        language: "japanese",
-        task: "transcribe"
-      });
-
-      const text = (result.text || "").trim();
-
-      if (!text) {
-        setStatus("⚠️ 音声を認識できませんでした");
-        return;
+    if (max > 0) {
+      for (let i = 0; i < channelData.length; i++) {
+        channelData[i] /= max;
       }
-
-      const emotion = analyzeEmotion(text);
-      await db.entries.add({ timestamp: Date.now(), text, emotion });
-      setStatus("✅ 保存しました！");
-      render();
-
-    } catch (err) {
-      console.error("Transcription error:", err);
-      setStatus(`❌ 文字起こしエラー: ${err.message}`);
     }
+
+    // 無音トリミング
+    const threshold = 0.01;
+    let start = 0;
+    let end = channelData.length - 1;
+
+    while (start < channelData.length && Math.abs(channelData[start]) < threshold) start++;
+    while (end > start && Math.abs(channelData[end]) < threshold) end--;
+
+    const trimmed = channelData.slice(start, end);
+
+    statusText.textContent = "文字起こし中...";
+
+    const result = await transcriber(trimmed, {
+      language: "japanese",
+      task: "transcribe",
+      temperature: 0.0,
+      beam_size: 5,
+      best_of: 5
+    });
+
+    output.value = result.text;
+    statusText.textContent = "完了";
   };
 
-  recorder.start(100); // 100ms チャンク
-  isRecording = true;
-  recordBtn.innerHTML = "⏹ 停止して保存";
-  recordBtn.classList.replace("bg-red-500", "bg-slate-600");
-  recordBtn.classList.add("recording-pulse");
-  setStatus("🎙 録音中...");
-}
-
-function stopRecording() {
-  if (recorder && recorder.state !== "inactive") {
-    recorder.stop();
-  }
-  isRecording = false;
-  recordBtn.innerHTML = "🎙 録音開始";
-  recordBtn.classList.replace("bg-slate-600", "bg-red-500");
-  recordBtn.classList.remove("recording-pulse");
-}
-
-function getSupportedMimeType() {
-  const types = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-    "audio/ogg",
-    "audio/mp4"
-  ];
-  for (const type of types) {
-    if (MediaRecorder.isTypeSupported(type)) return type;
-  }
-  return "";
-}
-
-// ================= Manual Input =================
-manualSaveBtn.onclick = async () => {
-  const text = manualText.value.trim();
-  if (!text) { alert("テキストを入力してください"); return; }
-  const emotion = analyzeEmotion(text);
-  await db.entries.add({ timestamp: Date.now(), text, emotion });
-  manualText.value = "";
-  setStatus("✅ 保存しました！");
-  render();
+  recorder.start();
+  recordBtn.disabled = true;
+  stopBtn.disabled = false;
+  statusText.textContent = "録音中...";
 };
 
-// ================= Export =================
-async function exportMarkdown() {
-  const entries = await db.entries.orderBy("timestamp").toArray();
-  if (entries.length === 0) { alert("エクスポートする日記がありません"); return; }
-
-  let md = "# PrivateEcho+ Diary\n\n";
-  entries.forEach(e => {
-    md += `## ${new Date(e.timestamp).toLocaleString("ja-JP")} (${e.emotion})\n\n`;
-    md += e.text + "\n\n---\n\n";
-  });
-
-  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `diary_${new Date().toISOString().slice(0,10)}.md`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-}
-
-// ================= Dark Mode =================
-darkToggle.onclick = () => {
-  isDark = !isDark;
-  document.body.classList.toggle("dark-mode", isDark);
-  darkToggle.innerText = isDark ? "☀️ Light" : "🌙 Dark";
+stopBtn.onclick = () => {
+  recorder.stop();
+  recordBtn.disabled = false;
+  stopBtn.disabled = true;
 };
 
-// ================= Events =================
-loadModelBtn.onclick = initAI;
-
-recordBtn.onclick = () => {
-  if (isRecording) stopRecording();
-  else startRecording();
-};
-
-exportBtn.onclick = exportMarkdown;
-
-function setStatus(msg) {
-  statusEl.innerText = msg;
-}
-
-// ================= Init =================
-render();
 </script>
 </body>
 </html>
