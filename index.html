@@ -1,215 +1,280 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>PrivateEcho - AI Voice Diary</title>
-
-<style>
-body {
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #111;
-  color: white;
-  text-align: center;
-  padding: 30px;
-}
-
-button {
-  padding: 10px 20px;
-  font-size: 16px;
-  border: none;
-  border-radius: 8px;
-  margin: 5px;
-  cursor: pointer;
-}
-
-#record { background: #e63946; color: white; }
-#stop { background: #457b9d; color: white; }
-#save { background: #2a9d8f; color: white; }
-
-textarea {
-  width: 90%;
-  max-width: 600px;
-  height: 150px;
-  margin-top: 20px;
-  padding: 15px;
-  border-radius: 10px;
-  border: none;
-  font-size: 16px;
-}
-
-#entries {
-  margin-top: 40px;
-  max-width: 600px;
-  margin-left: auto;
-  margin-right: auto;
-  text-align: left;
-}
-
-.entry {
-  background: #222;
-  padding: 15px;
-  margin-bottom: 15px;
-  border-radius: 10px;
-}
-
-.entry small {
-  opacity: 0.6;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrivateEcho+ Advanced</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Noto+Sans+JP:wght@400;700&display=swap');
+        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
+        .recording-pulse { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
+        .dark-mode { background-color: #0f172a !important; color: #f8fafc !important; }
+        .dark-mode .card { background-color: #1e293b !important; border-color: #334155 !important; }
+        canvas { width: 100%; height: 60px; border-radius: 8px; }
+    </style>
 </head>
-<body>
+<body class="bg-slate-50 min-h-screen p-4 md:p-8 transition-colors" id="body">
 
-<h1>🎤 PrivateEcho</h1>
-<p>AI Voice Diary</p>
+<div class="max-w-2xl mx-auto space-y-6">
+    <header class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-black text-indigo-600 tracking-tight">PrivateEcho+</h1>
+            <p id="emotionSummary" class="text-xs text-slate-500 font-medium"></p>
+        </div>
+        <div class="flex gap-2">
+            <button id="darkToggle" class="p-2 border rounded-full hover:bg-white transition-all text-sm">🌙</button>
+            <button id="exportBtn" class="p-2 border rounded-full hover:bg-white transition-all text-sm">📁</button>
+        </div>
+    </header>
 
-<button id="record">録音開始</button>
-<button id="stop" disabled>停止</button>
-<button id="save">日記を保存</button>
+    <section class="card bg-white p-6 rounded-3xl shadow-xl border border-slate-100 space-y-4">
+        <div class="flex gap-2">
+            <select id="modelSelect" class="bg-slate-50 text-sm border-none rounded-lg px-3 py-2 flex-1 focus:ring-2 focus:ring-indigo-500">
+                <option value="Xenova/whisper-tiny">Whisper Tiny (高速)</option>
+                <option value="Xenova/whisper-base" selected>Whisper Base (標準)</option>
+                <option value="Xenova/whisper-small">Whisper Small (高精度)</option>
+            </select>
+            <button id="loadModelBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 transition-all">
+                読込
+            </button>
+        </div>
 
-<div id="status">モデル未ロード</div>
+        <div id="visualizerContainer" class="hidden">
+            <canvas id="canvas"></canvas>
+        </div>
 
-<textarea id="output" placeholder="ここに文字起こし結果が表示されます"></textarea>
+        <button id="recordBtn" disabled class="w-full py-4 rounded-2xl bg-slate-200 text-slate-500 font-bold text-lg transition-all flex items-center justify-center gap-2">
+            <span>🎙 モデルを読み込んでください</span>
+        </button>
+        
+        <div id="status" class="text-[10px] uppercase tracking-widest text-slate-400 text-center font-bold">System Ready</div>
+    </section>
 
-<h2>📚 過去の日記</h2>
-<div id="entries"></div>
+    <div id="diaryList" class="space-y-4"></div>
+</div>
 
-<script type="module">
-import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
+<script>
+// --- データベース設定 ---
+const db = new Dexie("PrivateEchoDB");
+db.version(1).stores({ entries: '++id, timestamp, text, emotion, score' });
 
-let recorder;
+// --- 状態管理 ---
+let transcriber = null;
+let recorder = null;
 let chunks = [];
-let transcriber;
-let isModelLoading = false;
+let audioCtx = null;
+let analyser = null;
+let animationId = null;
 
-const recordBtn = document.getElementById("record");
-const stopBtn = document.getElementById("stop");
-const saveBtn = document.getElementById("save");
-const output = document.getElementById("output");
-const statusText = document.getElementById("status");
-const entriesDiv = document.getElementById("entries");
-
-// ===== モデルロード =====
-async function loadModel() {
-  if (transcriber || isModelLoading) return;
-  isModelLoading = true;
-  statusText.textContent = "モデル読み込み中...";
-
-  transcriber = await pipeline(
-    "automatic-speech-recognition",
-    "Xenova/whisper-small",
-    {
-      quantized: true,
-      chunk_length_s: 30,
-      stride_length_s: 5
+// --- 感情分析エンジン (強化版) ---
+const EMOTION_DICT = {
+    positive: {
+        words: ["嬉しい", "楽しい", "最高", "幸せ", "感謝", "できた", "成功", "面白い", "ワクワク", "好き", "感動", "満足", "充実", "リラックス", "素晴らしい", "絶好調", "いい感じ", "笑"],
+        score: 1
+    },
+    negative: {
+        words: ["辛い", "疲れた", "最悪", "悲しい", "苦しい", "怒り", "失敗", "不安", "嫌だ", "だるい", "落ち込む", "ショック", "寂しい", "イライラ", "ダメ", "後悔", "死ぬ", "酷い"],
+        score: -1
     }
-  );
+};
 
-  statusText.textContent = "モデルロード完了";
+function analyzeEmotion(text) {
+    let score = 0;
+    EMOTION_DICT.positive.words.forEach(w => { if(text.includes(w)) score += 1; });
+    EMOTION_DICT.negative.words.forEach(w => { if(text.includes(w)) score -= 1; });
+    
+    // 文末の否定（〜ない）を簡易チェック
+    if (text.includes("くない") || text.includes("じゃない") || text.includes("なかった")) {
+        score *= -0.5; // スコアを反転・減衰させる
+    }
+
+    if (score > 0.5) return { label: "positive", emoji: "✨", score };
+    if (score < -0.5) return { label: "negative", emoji: "💧", score };
+    return { label: "neutral", emoji: "☁️", score };
 }
 
-// ===== 録音 =====
-recordBtn.onclick = async () => {
-  await loadModel();
-
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  recorder = new MediaRecorder(stream);
-  chunks = [];
-
-  recorder.ondataavailable = e => chunks.push(e.data);
-
-  recorder.onstop = async () => {
-    statusText.textContent = "音声処理中...";
-
-    const blob = new Blob(chunks);
-    const arrayBuffer = await blob.arrayBuffer();
-
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)({
-      sampleRate: 16000
-    });
-
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    let channelData = audioBuffer.getChannelData(0);
-
-    // 正規化
-    let max = Math.max(...channelData.map(x => Math.abs(x)));
-    if (max > 0) channelData = channelData.map(x => x / max);
-
-    // 無音カット
-    const threshold = 0.01;
-    let start = channelData.findIndex(v => Math.abs(v) > threshold);
-    let end = channelData.length - [...channelData].reverse().findIndex(v => Math.abs(v) > threshold);
-    channelData = channelData.slice(start, end);
-
-    statusText.textContent = "文字起こし中...";
-
-    const result = await transcriber(channelData, {
-      language: "japanese",
-      task: "transcribe",
-      temperature: 0.0,
-      beam_size: 5
-    });
-
-    output.value = result.text;
-    statusText.textContent = "完了";
-  };
-
-  recorder.start();
-  recordBtn.disabled = true;
-  stopBtn.disabled = false;
-  statusText.textContent = "録音中...";
-};
-
-stopBtn.onclick = () => {
-  recorder.stop();
-  recordBtn.disabled = false;
-  stopBtn.disabled = true;
-};
-
-// ===== 日記保存 =====
-saveBtn.onclick = () => {
-  const text = output.value.trim();
-  if (!text) return alert("内容が空です");
-
-  const diary = JSON.parse(localStorage.getItem("diary") || "[]");
-
-  diary.unshift({
-    id: Date.now(),
-    date: new Date().toLocaleString(),
-    text: text
-  });
-
-  localStorage.setItem("diary", JSON.stringify(diary));
-  output.value = "";
-  renderEntries();
-};
-
-// ===== 表示 =====
-function renderEntries() {
-  const diary = JSON.parse(localStorage.getItem("diary") || "[]");
-  entriesDiv.innerHTML = "";
-
-  diary.forEach(entry => {
-    const div = document.createElement("div");
-    div.className = "entry";
-    div.innerHTML = `
-      <small>${entry.date}</small>
-      <p>${entry.text}</p>
-      <button onclick="deleteEntry(${entry.id})">削除</button>
-    `;
-    entriesDiv.appendChild(div);
-  });
+// --- ビジュアライザー描画 ---
+function drawVisualizer() {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    function draw() {
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#6366f1';
+        const barWidth = (canvas.width / dataArray.length) * 2.5;
+        let x = 0;
+        for(let i = 0; i < dataArray.length; i++) {
+            const barHeight = (dataArray[i] / 255) * canvas.height;
+            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+            x += barWidth + 1;
+        }
+    }
+    draw();
 }
 
-window.deleteEntry = function(id) {
-  let diary = JSON.parse(localStorage.getItem("diary") || "[]");
-  diary = diary.filter(entry => entry.id !== id);
-  localStorage.setItem("diary", JSON.stringify(diary));
-  renderEntries();
+// --- AI 初期化 ---
+async function initAI() {
+    const btn = document.getElementById("loadModelBtn");
+    const recBtn = document.getElementById("recordBtn");
+    btn.disabled = true;
+    updateStatus("Model Downloading...");
+    
+    try {
+        const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js');
+        env.allowLocalModels = false;
+        
+        transcriber = await pipeline('automatic-speech-recognition', document.getElementById("modelSelect").value);
+        
+        updateStatus("AI Engine Online");
+        recBtn.disabled = false;
+        recBtn.classList.replace("bg-slate-200", "bg-indigo-600");
+        recBtn.classList.replace("text-slate-500", "text-white");
+        recBtn.innerHTML = "🎙 録音を開始する";
+        btn.innerText = "OK";
+    } catch (e) {
+        updateStatus("Error: " + e.message);
+    }
+}
+
+// --- 録音制御 ---
+async function toggleRecording() {
+    if (recorder && recorder.state === "recording") {
+        recorder.stop();
+        stopVisualizer();
+        return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    const source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    
+    document.getElementById("visualizerContainer").classList.remove("hidden");
+    drawVisualizer();
+
+    recorder = new MediaRecorder(stream);
+    chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        processAudio();
+    };
+
+    recorder.start();
+    updateStatus("Listening...");
+    const rb = document.getElementById("recordBtn");
+    rb.innerHTML = "⏹ 録音を終了";
+    rb.classList.add("recording-pulse", "bg-red-500");
+}
+
+function stopVisualizer() {
+    cancelAnimationFrame(animationId);
+    document.getElementById("visualizerContainer").classList.add("hidden");
+}
+
+async function processAudio() {
+    updateStatus("Transcribing...");
+    const blob = new Blob(chunks, { type: 'audio/webm' });
+    const buffer = await blob.arrayBuffer();
+    const decoded = await audioCtx.decodeAudioData(buffer);
+    const audioData = decoded.getChannelData(0);
+
+    const result = await transcriber(audioData, { 
+        language: 'japanese',
+        task: 'transcribe',
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        repetition_penalty: 1.2 // 繰り返しを抑制
+    });
+
+    const text = result.text.trim();
+    if(text) {
+        const emotionData = analyzeEmotion(text);
+        await db.entries.add({
+            timestamp: Date.now(),
+            text: text,
+            emotion: emotionData.label,
+            score: emotionData.score
+        });
+        render();
+    }
+    
+    updateStatus("Saved");
+    resetRecordBtn();
+}
+
+function resetRecordBtn() {
+    const rb = document.getElementById("recordBtn");
+    rb.innerHTML = "🎙 録音を開始する";
+    rb.classList.remove("recording-pulse", "bg-red-500");
+    rb.classList.add("bg-indigo-600");
+}
+
+function updateStatus(msg) {
+    document.getElementById("status").innerText = msg;
+}
+
+// --- レンダリング ---
+async function render() {
+    const entries = await db.entries.orderBy("timestamp").reverse().toArray();
+    const list = document.getElementById("diaryList");
+    list.innerHTML = "";
+
+    let stats = { positive: 0, negative: 0, neutral: 0 };
+    
+    entries.forEach(e => {
+        stats[e.emotion]++;
+        const card = document.createElement("div");
+        const emoji = analyzeEmotion(e.text).emoji;
+        const bgColor = e.emotion === 'positive' ? 'bg-emerald-50' : (e.emotion === 'negative' ? 'bg-rose-50' : 'bg-white');
+        
+        card.className = `card p-5 rounded-2xl border border-slate-100 ${bgColor} shadow-sm transition-all hover:shadow-md`;
+        card.innerHTML = `
+            <div class="flex justify-between items-start mb-3">
+                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${new Date(e.timestamp).toLocaleString()}</span>
+                <span class="text-xl">${emoji}</span>
+            </div>
+            <p class="text-slate-700 leading-relaxed text-sm font-medium">${e.text}</p>
+            <button onclick="deleteEntry(${e.id})" class="mt-4 text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest">Delete</button>
+        `;
+        list.appendChild(card);
+    });
+
+    document.getElementById("emotionSummary").innerText = `POS ${stats.positive} / NEU ${stats.neutral} / NEG ${stats.negative}`;
+}
+
+async function deleteEntry(id) {
+    if(confirm("削除しますか？")) {
+        await db.entries.delete(id);
+        render();
+    }
+}
+
+// --- イベント ---
+document.getElementById("loadModelBtn").onclick = initAI;
+document.getElementById("recordBtn").onclick = toggleRecording;
+document.getElementById("darkToggle").onclick = () => {
+    document.body.classList.toggle("dark-mode");
+};
+document.getElementById("exportBtn").onclick = async () => {
+    const data = await db.entries.toArray();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'diary-export.json';
+    a.click();
 };
 
-renderEntries();
+render();
 </script>
-
 </body>
 </html>
