@@ -1,747 +1,374 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; connect-src https://*.huggingface.co https://*.hf.co https://*.gstatic.com; worker-src 'self' blob:;">
-    <title>PrivateEcho - AIボイス日記</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PrivateEcho+ Emotion</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
+  body { font-family: 'Noto Sans JP', sans-serif; }
+  .fade-in { animation: fade 0.4s ease-out; }
+  @keyframes fade { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:translateY(0);} }
+  .recording-pulse { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
+  .dark-mode { background-color: #0f172a !important; color: #e2e8f0 !important; }
+  .dark-mode .card { background-color: #1e293b !important; border-color: #334155 !important; }
+  .dark-mode .text-slate-400 { color: #94a3b8 !important; }
+  .dark-mode .text-slate-500 { color: #94a3b8 !important; }
+  .loader {
+    width: 18px; height: 18px;
+    border: 2px solid #e2e8f0;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
 </head>
-<body class="bg-slate-50 min-h-screen p-4 md:p-8 text-slate-800">
 
-    <div class="max-w-2xl mx-auto space-y-8">
-        <header class="text-center">
-            <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho</h1>
-            <p class="text-slate-500">サーバー送信なし。あなたのデバイス内だけで完結するAI日記</p>
-            <div id="modelInfo" class="mt-2 text-xs text-slate-400"></div>
-        </header>
+<body class="bg-slate-50 min-h-screen p-6 text-slate-800 transition-colors" id="body">
 
-        <!-- 情報メッセージ表示エリア -->
-        <div id="infoAlert" class="hidden bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg" role="alert">
-            <div class="flex items-start">
-                <span class="text-blue-500 mr-2">ℹ️</span>
-                <div class="flex-1">
-                    <p class="font-bold">お知らせ</p>
-                    <p id="infoMessage" class="text-sm"></p>
-                </div>
-                <button id="closeInfo" class="text-blue-500 hover:text-blue-700 ml-2">&times;</button>
-            </div>
-        </div>
+<div class="max-w-3xl mx-auto space-y-8">
 
-        <!-- エラーメッセージ表示エリア -->
-        <div id="errorAlert" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg" role="alert">
-            <div class="flex items-start">
-                <span class="text-red-500 mr-2">⚠️</span>
-                <div class="flex-1">
-                    <p class="font-bold">エラーが発生しました</p>
-                    <p id="errorMessage" class="text-sm"></p>
-                </div>
-                <button id="closeError" class="text-red-500 hover:text-red-700 ml-2">&times;</button>
-            </div>
-        </div>
+  <header class="text-center space-y-2">
+    <h1 class="text-3xl font-bold text-indigo-600">PrivateEcho+</h1>
+    <p class="text-slate-500 text-sm">感情が可視化されるAIボイス日記</p>
 
-        <section class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-            <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
-                <button id="recordBtn"
-                        class="bg-red-500 hover:bg-red-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 w-full sm:w-auto justify-center"
-                        aria-label="録音ボタン">
-                    <span id="recordIcon" class="w-3 h-3 bg-white rounded-full"></span>
-                    <span id="recordText">録音開始</span>
-                </button>
-                <div id="status" class="text-sm text-slate-400 font-mono">Ready</div>
-            </div>
-
-            <!-- プログレスバー -->
-            <div id="loadingBar" class="mt-4 hidden">
-                <div class="flex justify-between text-xs text-slate-500 mb-1">
-                    <span id="loadingText">処理中...</span>
-                    <span id="loadingPercent">0%</span>
-                </div>
-                <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                    <div id="progress" class="bg-indigo-500 h-full w-0 transition-all duration-300"></div>
-                </div>
-            </div>
-
-            <!-- モデル選択（初回のみ表示） -->
-            <div id="modelSelection" class="mt-4 hidden p-4 bg-slate-50 rounded-lg border border-slate-200">
-                <p class="text-sm text-slate-600 mb-3">文字起こし方法を選択してください：</p>
-                <div class="space-y-2">
-                    <button id="selectAI" class="w-full text-left px-4 py-3 bg-white border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors">
-                        <div class="font-semibold text-indigo-600">🤖 AIモデル（オフライン対応）</div>
-                        <div class="text-xs text-slate-500 mt-1">初回に40MB程度のダウンロードが必要。以降はオフラインで使用可能</div>
-                    </button>
-                    <button id="selectWebSpeech" class="w-full text-left px-4 py-3 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
-                        <div class="font-semibold text-slate-700">🌐 ブラウザ標準機能（要インターネット）</div>
-                        <div class="text-xs text-slate-500 mt-1">ダウンロード不要。常にインターネット接続が必要</div>
-                    </button>
-                </div>
-            </div>
-        </section>
-
-        <!-- 日記エントリーリスト -->
-        <div id="diaryList" class="space-y-4" role="list"></div>
-
-        <!-- 空状態 -->
-        <div id="emptyState" class="hidden text-center py-12">
-            <div class="text-6xl mb-4">🎤</div>
-            <p class="text-slate-400">まだ日記がありません</p>
-            <p class="text-slate-400 text-sm mt-2">上の録音ボタンから始めましょう</p>
-        </div>
+    <div class="flex justify-center gap-4 mt-3">
+      <button id="darkToggle" class="text-xs px-3 py-1 border rounded hover:bg-slate-100 transition-colors">🌙 Dark</button>
+      <button id="exportBtn" class="text-xs px-3 py-1 border rounded hover:bg-slate-100 transition-colors">📁 Markdown Export</button>
     </div>
 
-    <!-- 削除確認モーダル -->
-    <div id="deleteModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-lg p-6 max-w-sm w-full">
-            <h3 class="text-lg font-bold mb-2">削除の確認</h3>
-            <p class="text-slate-600 mb-4">この日記を削除しますか？この操作は取り消せません。</p>
-            <div class="flex gap-3 justify-end">
-                <button id="cancelDelete" class="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">キャンセル</button>
-                <button id="confirmDelete" class="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600">削除する</button>
-            </div>
-        </div>
+    <div id="emotionSummary" class="text-xs text-slate-400 mt-2"></div>
+  </header>
+
+  <section class="card bg-white p-6 rounded-2xl shadow-sm border space-y-4">
+
+    <!-- AI モデル選択 -->
+    <div class="flex items-center gap-3">
+      <label class="text-sm font-medium text-slate-600 whitespace-nowrap">モデル:</label>
+      <select id="modelSelect" class="text-sm border rounded px-2 py-1 flex-1">
+        <option value="Xenova/whisper-tiny">whisper-tiny（高速・低精度）</option>
+        <option value="Xenova/whisper-base">whisper-base（バランス型）</option>
+        <option value="Xenova/whisper-small">whisper-small（高精度・低速）</option>
+      </select>
+      <button id="loadModelBtn" class="text-xs px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 transition-colors">
+        読み込み
+      </button>
     </div>
 
-    <script type="module">
-        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
-
-        // Transformers.jsの設定
-        env.allowLocalModels = false;
-        env.allowRemoteModels = true;
-
-        // ============================================
-        // 1. データベース設定 (Dexie)
-        // ============================================
-        const db = new Dexie("DiaryDB");
-        db.version(2).stores({
-            entries: '++id, date, text, timestamp',
-            settings: 'key, value'
-        });
-
-        // ============================================
-        // 2. アプリケーション状態管理
-        // ============================================
-        const AppState = {
-            mediaRecorder: null,
-            audioChunks: [],
-            transcriber: null,
-            recognition: null,
-            isRecording: false,
-            isProcessing: false,
-            deleteTargetId: null,
-            isModelLoaded: false,
-            transcriptionMethod: null, // 'ai' or 'webspeech'
-            modelLoadProgress: 0
-        };
-
-        // ============================================
-        // 3. DOM要素の取得
-        // ============================================
-        const elements = {
-            recordBtn: document.getElementById('recordBtn'),
-            recordText: document.getElementById('recordText'),
-            recordIcon: document.getElementById('recordIcon'),
-            status: document.getElementById('status'),
-            diaryList: document.getElementById('diaryList'),
-            emptyState: document.getElementById('emptyState'),
-            loadingBar: document.getElementById('loadingBar'),
-            progress: document.getElementById('progress'),
-            loadingText: document.getElementById('loadingText'),
-            loadingPercent: document.getElementById('loadingPercent'),
-            modelInfo: document.getElementById('modelInfo'),
-            errorAlert: document.getElementById('errorAlert'),
-            errorMessage: document.getElementById('errorMessage'),
-            closeError: document.getElementById('closeError'),
-            infoAlert: document.getElementById('infoAlert'),
-            infoMessage: document.getElementById('infoMessage'),
-            closeInfo: document.getElementById('closeInfo'),
-            deleteModal: document.getElementById('deleteModal'),
-            confirmDelete: document.getElementById('confirmDelete'),
-            cancelDelete: document.getElementById('cancelDelete'),
-            modelSelection: document.getElementById('modelSelection'),
-            selectAI: document.getElementById('selectAI'),
-            selectWebSpeech: document.getElementById('selectWebSpeech')
-        };
-
-        // ============================================
-        // 4. ユーティリティ関数
-        // ============================================
-
-        // 情報表示
-        function showInfo(message) {
-            elements.infoMessage.textContent = message;
-            elements.infoAlert.classList.remove('hidden');
-        }
-
-        // 情報非表示
-        function hideInfo() {
-            elements.infoAlert.classList.add('hidden');
-        }
-
-        // エラー表示
-        function showError(message) {
-            elements.errorMessage.textContent = message;
-            elements.errorAlert.classList.remove('hidden');
-            console.error('Error:', message);
-        }
-
-        // エラー非表示
-        function hideError() {
-            elements.errorAlert.classList.add('hidden');
-        }
-
-        // ローディング表示
-        function showLoading(text = '処理中...') {
-            elements.loadingBar.classList.remove('hidden');
-            elements.loadingText.textContent = text;
-            updateProgress(0);
-        }
-
-        // ローディング非表示
-        function hideLoading() {
-            elements.loadingBar.classList.add('hidden');
-            updateProgress(0);
-        }
-
-        // プログレス更新
-        function updateProgress(percent) {
-            const smoothPercent = Math.min(Math.max(percent, 0), 100);
-            elements.progress.style.width = `${smoothPercent}%`;
-            elements.loadingPercent.textContent = `${Math.round(smoothPercent)}%`;
-        }
-
-        // ステータス更新
-        function setStatus(text, isError = false) {
-            elements.status.textContent = text;
-            elements.status.className = isError
-                ? 'text-sm text-red-500 font-mono'
-                : 'text-sm text-slate-400 font-mono';
-        }
-
-        // ボタン状態更新
-        function updateButtonState(isRecording) {
-            AppState.isRecording = isRecording;
-
-            if (isRecording) {
-                elements.recordBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
-                elements.recordBtn.classList.add('bg-slate-600', 'hover:bg-slate-700');
-                elements.recordText.textContent = '停止して保存';
-                elements.recordIcon.classList.add('animate-pulse');
-                setStatus('録音中...');
-            } else {
-                elements.recordBtn.classList.remove('bg-slate-600', 'hover:bg-slate-700');
-                elements.recordBtn.classList.add('bg-red-500', 'hover:bg-red-600');
-                elements.recordText.textContent = '録音開始';
-                elements.recordIcon.classList.remove('animate-pulse');
-            }
-        }
-
-        // ボタンの有効/無効切り替え
-        function setButtonEnabled(enabled) {
-            elements.recordBtn.disabled = !enabled;
-        }
-
-        // ============================================
-        // 5. 設定の保存・読み込み
-        // ============================================
-        async function saveTranscriptionMethod(method) {
-            await db.settings.put({ key: 'transcriptionMethod', value: method });
-            AppState.transcriptionMethod = method;
-        }
-
-        async function loadTranscriptionMethod() {
-            const setting = await db.settings.get('transcriptionMethod');
-            return setting ? setting.value : null;
-        }
-
-        // ============================================
-        // 6. AIモデルの初期化
-        // ============================================
-        async function initAI() {
-            if (AppState.isModelLoaded && AppState.transcriber) {
-                return true;
-            }
-
-            try {
-                setStatus('AIモデルを読込中...');
-                setButtonEnabled(false);
-                showLoading('AIモデルをダウンロード中...');
-
-                AppState.transcriber = await pipeline(
-                    'automatic-speech-recognition',
-                    'onnx-community/whisper-tiny',
-                    {
-                        dtype: {
-                            encoder_model: 'fp32',
-                            decoder_model_merged: 'fp32',
-                        },
-                        device: 'wasm',
-                        progress_callback: (progress) => {
-                            // statusが 'progress' の時に進捗率を更新
-                            if (progress.status === 'progress' && typeof progress.progress === 'number') {
-                                updateProgress(progress.progress);
-                            }
-                            // ダウンロード中のファイル名を表示（任意）
-                            if (progress.file) {
-                                elements.loadingText.textContent = `読込中: ${progress.file}`;
-                            }
-                        }
-                    }
-                );
-
-                AppState.isModelLoaded = true;
-                hideLoading();
-                setStatus('AI Ready ✓');
-                setButtonEnabled(true);
-                elements.modelInfo.textContent = '🤖 AIモデル (オフライン対応) ✓';
-                return true;
-
-            } catch (error) {
-                console.error('Model loading error:', error);
-                hideLoading();
-                setStatus('AI読込失敗', true);
-                setButtonEnabled(true);
-                showError(`AIモデルの読み込みに失敗しました: ${error.message}`);
-                return false;
-            }
-        }
-
-        // ============================================
-        // 7. Web Speech APIの初期化
-        // ============================================
-        function initWebSpeech() {
-            try {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-                if (!SpeechRecognition) {
-                    throw new Error('お使いのブラウザは音声認識に対応していません');
-                }
-
-                AppState.recognition = new SpeechRecognition();
-                AppState.recognition.lang = 'ja-JP';
-                AppState.recognition.continuous = false;
-                AppState.recognition.interimResults = false;
-                AppState.recognition.maxAlternatives = 1;
-
-                elements.modelInfo.textContent = '🌐 ブラウザ標準機能 (要ネット接続) ✓';
-                setStatus('Ready');
-                return true;
-
-            } catch (error) {
-                showError(`音声認識の初期化に失敗: ${error.message}`);
-                return false;
-            }
-        }
-
-        // ============================================
-        // 8. 録音機能 (AIモデル使用)
-        // ============================================
-        async function startRecordingWithAI() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        channelCount: 1,
-                        sampleRate: 16000,
-                    }
-                });
-
-                AppState.mediaRecorder = new MediaRecorder(stream);
-                AppState.audioChunks = [];
-
-                AppState.mediaRecorder.ondataavailable = (e) => {
-                    if (e.data.size > 0) {
-                        AppState.audioChunks.push(e.data);
-                    }
-                };
-
-                AppState.mediaRecorder.onstop = async () => {
-                    stream.getTracks().forEach(track => track.stop());
-                    await processRecordingWithAI();
-                };
-
-                AppState.mediaRecorder.onerror = (error) => {
-                    showError(`録音エラー: ${error.message}`);
-                    stopRecording();
-                };
-
-                AppState.mediaRecorder.start();
-                updateButtonState(true);
-
-            } catch (error) {
-                handleMicrophoneError(error);
-            }
-        }
-
-        async function processRecordingWithAI() {
-            AppState.isProcessing = true;
-            setButtonEnabled(false);
-
-            try {
-                setStatus('文字起こし中...');
-                showLoading('音声を処理中...');
-                updateProgress(10);
-
-                if (AppState.audioChunks.length === 0) {
-                    throw new Error('録音データがありません');
-                }
-
-                const audioBlob = new Blob(AppState.audioChunks, {
-                    type: AppState.audioChunks[0].type
-                });
-                updateProgress(30);
-
-                const arrayBuffer = await audioBlob.arrayBuffer();
-                const audioData = new Uint8Array(arrayBuffer);
-
-                updateProgress(50);
-
-                console.log('Starting transcription...');
-                const result = await AppState.transcriber(audioData, {
-                    language: 'japanese',
-                    task: 'transcribe',
-                    chunk_length_s: 30,
-                    stride_length_s: 5,
-                    return_timestamps: false
-                });
-
-                console.log('Transcription result:', result);
-                updateProgress(80);
-
-                if (!result || !result.text || result.text.trim() === '') {
-                    throw new Error('音声を認識できませんでした。もう一度お試しください。');
-                }
-
-                await saveEntry(result.text.trim());
-                updateProgress(100);
-
-                setStatus('完了！ ✓');
-                hideLoading();
-                setTimeout(() => setStatus('Ready'), 2000);
-
-            } catch (error) {
-                console.error('Processing error:', error);
-                showError(`処理エラー: ${error.message}`);
-                setStatus('処理失敗', true);
-                hideLoading();
-            } finally {
-                AppState.isProcessing = false;
-                setButtonEnabled(true);
-                AppState.audioChunks = [];
-            }
-        }
-
-        // ============================================
-        // 9. 録音機能 (Web Speech API使用)
-        // ============================================
-        function startRecordingWithWebSpeech() {
-            try {
-                AppState.recognition.onstart = () => {
-                    updateButtonState(true);
-                    setStatus('録音中... (話してください)');
-                };
-
-                AppState.recognition.onresult = async (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    console.log('Recognition result:', transcript);
-
-                    if (transcript && transcript.trim()) {
-                        setStatus('保存中...');
-                        await saveEntry(transcript.trim());
-                        setStatus('完了！ ✓');
-                        setTimeout(() => setStatus('Ready'), 2000);
-                    } else {
-                        showError('音声を認識できませんでした');
-                    }
-                };
-
-                AppState.recognition.onerror = (event) => {
-                    console.error('Recognition error:', event.error);
-                    updateButtonState(false);
-
-                    if (event.error === 'no-speech') {
-                        showError('音声が検出されませんでした。もう一度お試しください。');
-                    } else if (event.error === 'network') {
-                        showError('ネットワークエラー。インターネット接続を確認してください。');
-                    } else {
-                        showError(`音声認識エラー: ${event.error}`);
-                    }
-                    setStatus('Ready');
-                };
-
-                AppState.recognition.onend = () => {
-                    updateButtonState(false);
-                    if (!AppState.isProcessing) {
-                        setStatus('Ready');
-                    }
-                };
-
-                AppState.recognition.start();
-
-            } catch (error) {
-                showError(`音声認識の開始に失敗: ${error.message}`);
-            }
-        }
-
-        function stopRecordingWithWebSpeech() {
-            if (AppState.recognition) {
-                AppState.recognition.stop();
-            }
-        }
-
-        // ============================================
-        // 10. 共通の録音制御
-        // ============================================
-        function stopRecording() {
-            if (AppState.transcriptionMethod === 'ai') {
-                if (AppState.mediaRecorder && AppState.mediaRecorder.state === 'recording') {
-                    AppState.mediaRecorder.stop();
-                    updateButtonState(false);
-                }
-            } else if (AppState.transcriptionMethod === 'webspeech') {
-                stopRecordingWithWebSpeech();
-            }
-        }
-
-        function handleMicrophoneError(error) {
-            if (error.name === 'NotAllowedError') {
-                showError('マイクへのアクセスが拒否されました。ブラウザの設定を確認してください。');
-            } else if (error.name === 'NotFoundError') {
-                showError('マイクが見つかりません。デバイスにマイクが接続されているか確認してください。');
-            } else {
-                showError(`録音の開始に失敗しました: ${error.message}`);
-            }
-            setStatus('録音失敗', true);
-        }
-
-        // ============================================
-        // 11. データ保存
-        // ============================================
-        async function saveEntry(text) {
-            await db.entries.add({
-                date: new Date().toLocaleString('ja-JP', {
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                }),
-                timestamp: Date.now(),
-                text: text
-            });
-
-            await renderDiaries();
-        }
-
-        // ============================================
-        // 12. 日記の表示
-        // ============================================
-        async function renderDiaries() {
-            try {
-                const entries = await db.entries.orderBy('timestamp').reverse().toArray();
-
-                if (entries.length === 0) {
-                    elements.diaryList.classList.add('hidden');
-                    elements.emptyState.classList.remove('hidden');
-                    return;
-                }
-
-                elements.diaryList.classList.remove('hidden');
-                elements.emptyState.classList.add('hidden');
-
-                elements.diaryList.innerHTML = entries.map(entry => `
-                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-100 animate-fade-in hover:shadow-md transition-shadow" role="listitem">
-                            <div class="flex justify-between items-start mb-3">
-                                <div class="text-xs text-slate-400">${escapeHtml(entry.date)}</div>
-                                <button
-                                    class="delete-btn text-slate-400 hover:text-red-500 transition-colors p-1"
-                                    data-id="${entry.id}"
-                                    aria-label="削除"
-                                    title="削除">
-                                    🗑️
-                                </button>
-                            </div>
-                            <p class="text-slate-700 leading-relaxed whitespace-pre-wrap">${escapeHtml(entry.text)}</p>
-                        </div>
-                    `).join('');
-
-                document.querySelectorAll('.delete-btn').forEach(btn => {
-                    btn.addEventListener('click', (e) => {
-                        const id = parseInt(e.currentTarget.dataset.id);
-                        showDeleteModal(id);
-                    });
-                });
-
-            } catch (error) {
-                showError(`日記の表示に失敗しました: ${error.message}`);
-            }
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // ============================================
-        // 13. 削除機能
-        // ============================================
-        function showDeleteModal(id) {
-            AppState.deleteTargetId = id;
-            elements.deleteModal.classList.remove('hidden');
-        }
-
-        function hideDeleteModal() {
-            AppState.deleteTargetId = null;
-            elements.deleteModal.classList.add('hidden');
-        }
-
-        async function deleteEntry() {
-            if (AppState.deleteTargetId === null) return;
-
-            try {
-                await db.entries.delete(AppState.deleteTargetId);
-                await renderDiaries();
-                hideDeleteModal();
-                setStatus('削除しました');
-                setTimeout(() => setStatus('Ready'), 2000);
-            } catch (error) {
-                showError(`削除に失敗しました: ${error.message}`);
-            }
-        }
-
-        // ============================================
-        // 14. イベントリスナーの設定
-        // ============================================
-
-        // 録音ボタン
-        elements.recordBtn.addEventListener('click', async () => {
-            if (AppState.isProcessing) return;
-
-            // 文字起こし方法が未選択の場合、選択画面を表示
-            if (!AppState.transcriptionMethod) {
-                elements.modelSelection.classList.remove('hidden');
-                showInfo('まず文字起こし方法を選択してください');
-                return;
-            }
-
-            if (AppState.isRecording) {
-                stopRecording();
-            } else {
-                hideError();
-                hideInfo();
-
-                if (AppState.transcriptionMethod === 'ai') {
-                    if (!AppState.isModelLoaded) {
-                        const success = await initAI();
-                        if (!success) return;
-                    }
-                    await startRecordingWithAI();
-                } else if (AppState.transcriptionMethod === 'webspeech') {
-                    startRecordingWithWebSpeech();
-                }
-            }
-        });
-
-        // AIモデル選択
-        elements.selectAI.addEventListener('click', async () => {
-            elements.modelSelection.classList.add('hidden');
-            hideInfo();
-            await saveTranscriptionMethod('ai');
-            const success = await initAI();
-            if (success) {
-                showInfo('AIモデルの読み込みが完了しました。録音ボタンを押して開始してください。');
-                setTimeout(hideInfo, 3000);
-            }
-        });
-
-        // Web Speech API選択
-        elements.selectWebSpeech.addEventListener('click', async () => {
-            elements.modelSelection.classList.add('hidden');
-            hideInfo();
-            await saveTranscriptionMethod('webspeech');
-            const success = initWebSpeech();
-            if (success) {
-                showInfo('ブラウザ標準機能を使用します。録音ボタンを押して開始してください。');
-                setTimeout(hideInfo, 3000);
-            }
-        });
-
-        // アラートを閉じる
-        elements.closeError.addEventListener('click', hideError);
-        elements.closeInfo.addEventListener('click', hideInfo);
-
-        // 削除モーダル
-        elements.confirmDelete.addEventListener('click', deleteEntry);
-        elements.cancelDelete.addEventListener('click', hideDeleteModal);
-
-        elements.deleteModal.addEventListener('click', (e) => {
-            if (e.target === elements.deleteModal) {
-                hideDeleteModal();
-            }
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !elements.deleteModal.classList.contains('hidden')) {
-                hideDeleteModal();
-            }
-        });
-
-        // ============================================
-        // 15. 初期化
-        // ============================================
-        async function initialize() {
-            try {
-                await renderDiaries();
-
-                // 保存された設定を読み込み
-                const savedMethod = await loadTranscriptionMethod();
-
-                if (savedMethod) {
-                    AppState.transcriptionMethod = savedMethod;
-
-                    if (savedMethod === 'ai') {
-                        // バックグラウンドでモデルを読み込み（任意）
-                        setStatus('Ready - AIモデル使用');
-                        elements.modelInfo.textContent = '🤖 AIモデル (初回クリック時に読み込み)';
-                    } else if (savedMethod === 'webspeech') {
-                        initWebSpeech();
-                    }
-                } else {
-                    // 初回起動時: 選択画面を表示
-                    setStatus('Ready - 録音ボタンをクリックして開始');
-                }
-
-                // ブラウザの互換性チェック
-                if (!window.MediaRecorder && !window.SpeechRecognition && !window.webkitSpeechRecognition) {
-                    showError('お使いのブラウザは音声機能に対応していません。Chrome、Edge、Firefox等の最新版をお使いください。');
-                }
-
-            } catch (error) {
-                showError(`初期化エラー: ${error.message}`);
-            }
-        }
-
-        // アプリケーション起動
-        initialize();
-    </script>
-
-    <style>
-        @keyframes fade-in {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .animate-fade-in {
-            animation: fade-in 0.4s ease-out forwards;
-        }
-    </style>
+    <button id="recordBtn"
+      class="bg-red-500 text-white px-6 py-3 rounded-full font-bold w-full hover:bg-red-600 transition-colors disabled:opacity-50"
+      disabled>
+      🎙 録音開始
+    </button>
+
+    <div id="status" class="text-xs text-slate-400 text-center">モデルを読み込んでください</div>
+
+    <!-- 手動入力フォールバック -->
+    <details class="text-xs text-slate-400">
+      <summary class="cursor-pointer hover:text-slate-600">✏️ テキストで直接入力（マイクが使えない場合）</summary>
+      <div class="mt-3 space-y-2">
+        <textarea id="manualText" rows="3"
+          class="w-full border rounded p-2 text-sm text-slate-700 resize-none"
+          placeholder="日記の内容を入力..."></textarea>
+        <button id="manualSaveBtn"
+          class="text-xs px-4 py-2 bg-slate-600 text-white rounded hover:bg-slate-700 transition-colors">
+          保存
+        </button>
+      </div>
+    </details>
+
+  </section>
+
+  <div id="diaryList" class="space-y-4"></div>
+
+</div>
+
+<script>
+// ================= DB =================
+const db = new Dexie("DiaryDB_v2");
+db.version(1).stores({
+  entries: '++id, timestamp, text, emotion'
+});
+
+// ================= State =================
+let recorder   = null;
+let chunks     = [];
+let transcriber = null;
+let isRecording = false;
+let aiReady    = false;
+let isDark     = false;
+
+// ================= DOM refs =================
+const recordBtn   = document.getElementById("recordBtn");
+const loadModelBtn = document.getElementById("loadModelBtn");
+const modelSelect  = document.getElementById("modelSelect");
+const statusEl    = document.getElementById("status");
+const darkToggle  = document.getElementById("darkToggle");
+const exportBtn   = document.getElementById("exportBtn");
+const manualSaveBtn = document.getElementById("manualSaveBtn");
+const manualText  = document.getElementById("manualText");
+
+// ================= Emotion =================
+function analyzeEmotion(text) {
+  const positive = ["嬉しい","楽しい","最高","良い","成功","達成","好き","幸せ","ありがとう","素晴らしい"];
+  const negative = ["辛い","疲れた","最悪","失敗","不安","嫌だ","悲しい","怖い","痛い","苦しい","ダメ"];
+  let score = 0;
+  positive.forEach(w => { if (text.includes(w)) score++; });
+  negative.forEach(w => { if (text.includes(w)) score--; });
+  if (score > 0) return "positive";
+  if (score < 0) return "negative";
+  return "neutral";
+}
+
+// ================= Render =================
+async function render() {
+  const entries = await db.entries.orderBy("timestamp").reverse().toArray();
+  const list = document.getElementById("diaryList");
+  list.innerHTML = "";
+
+  if (entries.length === 0) {
+    list.innerHTML = `<p class="text-center text-slate-400 py-8">まだ日記がありません</p>`;
+    return;
+  }
+
+  let pos = 0, neg = 0, neu = 0;
+
+  entries.forEach(e => {
+    if (e.emotion === "positive") pos++;
+    else if (e.emotion === "negative") neg++;
+    else neu++;
+
+    const emojiMap = { positive:"😊", negative:"😢", neutral:"😐" };
+    const colorMap = {
+      positive: "bg-green-50 border-green-200",
+      negative: "bg-red-50 border-red-200",
+      neutral:  "bg-slate-50 border-slate-200"
+    };
+    const color = colorMap[e.emotion] || colorMap.neutral;
+
+    const card = document.createElement("div");
+    card.className = `card p-5 rounded-xl border ${color} fade-in`;
+    card.innerHTML = `
+      <div class="flex justify-between items-start mb-2">
+        <span class="text-xs text-slate-400">${new Date(e.timestamp).toLocaleString("ja-JP")}</span>
+        <span class="text-lg">${emojiMap[e.emotion] || "😐"}</span>
+      </div>
+      <p class="whitespace-pre-wrap text-sm leading-relaxed">${escapeHtml(e.text)}</p>
+      <button class="mt-3 text-xs text-red-400 hover:text-red-600" data-id="${e.id}">🗑 削除</button>
+    `;
+    card.querySelector("button").onclick = () => deleteEntry(e.id);
+    list.appendChild(card);
+  });
+
+  document.getElementById("emotionSummary").innerText =
+    `記録: 😊${pos}件 / 😐${neu}件 / 😢${neg}件`;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+async function deleteEntry(id) {
+  if (!confirm("この日記を削除しますか？")) return;
+  await db.entries.delete(id);
+  render();
+}
+
+// ================= AI Init =================
+async function initAI() {
+  const modelName = modelSelect.value;
+  loadModelBtn.disabled = true;
+  loadModelBtn.innerHTML = '<span class="loader"></span>読込中...';
+  setStatus("🔄 モデルをダウンロード中... (初回は数分かかります)");
+  recordBtn.disabled = true;
+
+  try {
+    // Dynamic import を try-catch で安全に実行
+    const { pipeline, env } = await import(
+      'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js'
+    );
+
+    // ブラウザのメインスレッドで実行（Worker不要）
+    env.allowLocalModels = false;
+    env.useBrowserCache  = true;
+
+    transcriber = await pipeline(
+      'automatic-speech-recognition',
+      modelName,
+      { quantized: true }
+    );
+
+    aiReady = true;
+    recordBtn.disabled = false;
+    setStatus("✅ AI Ready — 録音を開始できます");
+    loadModelBtn.innerHTML = "✅ 完了";
+  } catch (err) {
+    console.error("AI Load Error:", err);
+    setStatus(`❌ モデル読み込みエラー: ${err.message}`);
+    loadModelBtn.disabled = false;
+    loadModelBtn.innerHTML = "再試行";
+    alert(`モデルの読み込みに失敗しました。\n\n原因: ${err.message}\n\n代わりにテキスト入力をご利用ください。`);
+  }
+}
+
+// ================= Recording =================
+async function startRecording() {
+  if (!aiReady) {
+    alert("先にモデルを読み込んでください");
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    alert(`マイクへのアクセスが拒否されました。\nブラウザの設定を確認してください。\n\nエラー: ${err.message}`);
+    return;
+  }
+
+  // サポートされているmimeTypeを選択
+  const mimeType = getSupportedMimeType();
+  recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+  chunks = [];
+
+  recorder.ondataavailable = e => {
+    if (e.data && e.data.size > 0) chunks.push(e.data);
+  };
+
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+
+    if (chunks.length === 0) {
+      setStatus("⚠️ 音声データがありません");
+      return;
+    }
+
+    setStatus("🔄 文字起こし中...");
+
+    try {
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      // Float32Array に変換（Whisperが要求する形式）
+      const channelData = audioBuffer.getChannelData(0);
+
+      const result = await transcriber(channelData, {
+        language: "japanese",
+        task: "transcribe"
+      });
+
+      const text = (result.text || "").trim();
+
+      if (!text) {
+        setStatus("⚠️ 音声を認識できませんでした");
+        return;
+      }
+
+      const emotion = analyzeEmotion(text);
+      await db.entries.add({ timestamp: Date.now(), text, emotion });
+      setStatus("✅ 保存しました！");
+      render();
+
+    } catch (err) {
+      console.error("Transcription error:", err);
+      setStatus(`❌ 文字起こしエラー: ${err.message}`);
+    }
+  };
+
+  recorder.start(100); // 100ms チャンク
+  isRecording = true;
+  recordBtn.innerHTML = "⏹ 停止して保存";
+  recordBtn.classList.replace("bg-red-500", "bg-slate-600");
+  recordBtn.classList.add("recording-pulse");
+  setStatus("🎙 録音中...");
+}
+
+function stopRecording() {
+  if (recorder && recorder.state !== "inactive") {
+    recorder.stop();
+  }
+  isRecording = false;
+  recordBtn.innerHTML = "🎙 録音開始";
+  recordBtn.classList.replace("bg-slate-600", "bg-red-500");
+  recordBtn.classList.remove("recording-pulse");
+}
+
+function getSupportedMimeType() {
+  const types = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mp4"
+  ];
+  for (const type of types) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
+// ================= Manual Input =================
+manualSaveBtn.onclick = async () => {
+  const text = manualText.value.trim();
+  if (!text) { alert("テキストを入力してください"); return; }
+  const emotion = analyzeEmotion(text);
+  await db.entries.add({ timestamp: Date.now(), text, emotion });
+  manualText.value = "";
+  setStatus("✅ 保存しました！");
+  render();
+};
+
+// ================= Export =================
+async function exportMarkdown() {
+  const entries = await db.entries.orderBy("timestamp").toArray();
+  if (entries.length === 0) { alert("エクスポートする日記がありません"); return; }
+
+  let md = "# PrivateEcho+ Diary\n\n";
+  entries.forEach(e => {
+    md += `## ${new Date(e.timestamp).toLocaleString("ja-JP")} (${e.emotion})\n\n`;
+    md += e.text + "\n\n---\n\n";
+  });
+
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `diary_${new Date().toISOString().slice(0,10)}.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// ================= Dark Mode =================
+darkToggle.onclick = () => {
+  isDark = !isDark;
+  document.body.classList.toggle("dark-mode", isDark);
+  darkToggle.innerText = isDark ? "☀️ Light" : "🌙 Dark";
+};
+
+// ================= Events =================
+loadModelBtn.onclick = initAI;
+
+recordBtn.onclick = () => {
+  if (isRecording) stopRecording();
+  else startRecording();
+};
+
+exportBtn.onclick = exportMarkdown;
+
+function setStatus(msg) {
+  statusEl.innerText = msg;
+}
+
+// ================= Init =================
+render();
+</script>
 </body>
 </html>
