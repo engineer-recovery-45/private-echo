@@ -11,49 +11,68 @@ body {
   background: #111;
   color: white;
   text-align: center;
-  padding: 40px;
+  padding: 30px;
 }
 
 button {
-  padding: 15px 30px;
-  font-size: 18px;
+  padding: 10px 20px;
+  font-size: 16px;
   border: none;
-  border-radius: 10px;
-  margin: 10px;
+  border-radius: 8px;
+  margin: 5px;
   cursor: pointer;
 }
 
 #record { background: #e63946; color: white; }
 #stop { background: #457b9d; color: white; }
+#save { background: #2a9d8f; color: white; }
 
 textarea {
   width: 90%;
   max-width: 600px;
-  height: 200px;
-  margin-top: 30px;
+  height: 150px;
+  margin-top: 20px;
   padding: 15px;
   border-radius: 10px;
   border: none;
   font-size: 16px;
 }
 
-#status {
-  margin-top: 20px;
-  font-size: 14px;
-  opacity: 0.7;
+#entries {
+  margin-top: 40px;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: left;
+}
+
+.entry {
+  background: #222;
+  padding: 15px;
+  margin-bottom: 15px;
+  border-radius: 10px;
+}
+
+.entry small {
+  opacity: 0.6;
 }
 </style>
 </head>
 <body>
 
 <h1>🎤 PrivateEcho</h1>
-<p>AI Voice Diary（高精度版）</p>
+<p>AI Voice Diary</p>
 
 <button id="record">録音開始</button>
 <button id="stop" disabled>停止</button>
+<button id="save">日記を保存</button>
 
 <div id="status">モデル未ロード</div>
+
 <textarea id="output" placeholder="ここに文字起こし結果が表示されます"></textarea>
+
+<h2>📚 過去の日記</h2>
+<div id="entries"></div>
 
 <script type="module">
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
@@ -65,13 +84,16 @@ let isModelLoading = false;
 
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
+const saveBtn = document.getElementById("save");
 const output = document.getElementById("output");
 const statusText = document.getElementById("status");
+const entriesDiv = document.getElementById("entries");
 
+// ===== モデルロード =====
 async function loadModel() {
   if (transcriber || isModelLoading) return;
   isModelLoading = true;
-  statusText.textContent = "モデル読み込み中（初回は1〜2分）...";
+  statusText.textContent = "モデル読み込み中...";
 
   transcriber = await pipeline(
     "automatic-speech-recognition",
@@ -86,6 +108,7 @@ async function loadModel() {
   statusText.textContent = "モデルロード完了";
 }
 
+// ===== 録音 =====
 recordBtn.onclick = async () => {
   await loadModel();
 
@@ -98,7 +121,7 @@ recordBtn.onclick = async () => {
   recorder.onstop = async () => {
     statusText.textContent = "音声処理中...";
 
-    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const blob = new Blob(chunks);
     const arrayBuffer = await blob.arrayBuffer();
 
     const audioContext = new (window.AudioContext || window.webkitAudioContext)({
@@ -106,39 +129,25 @@ recordBtn.onclick = async () => {
     });
 
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-    // モノラル取得
     let channelData = audioBuffer.getChannelData(0);
 
     // 正規化
-    let max = 0;
-    for (let i = 0; i < channelData.length; i++) {
-      max = Math.max(max, Math.abs(channelData[i]));
-    }
-    if (max > 0) {
-      for (let i = 0; i < channelData.length; i++) {
-        channelData[i] /= max;
-      }
-    }
+    let max = Math.max(...channelData.map(x => Math.abs(x)));
+    if (max > 0) channelData = channelData.map(x => x / max);
 
-    // 無音トリミング
+    // 無音カット
     const threshold = 0.01;
-    let start = 0;
-    let end = channelData.length - 1;
-
-    while (start < channelData.length && Math.abs(channelData[start]) < threshold) start++;
-    while (end > start && Math.abs(channelData[end]) < threshold) end--;
-
-    const trimmed = channelData.slice(start, end);
+    let start = channelData.findIndex(v => Math.abs(v) > threshold);
+    let end = channelData.length - [...channelData].reverse().findIndex(v => Math.abs(v) > threshold);
+    channelData = channelData.slice(start, end);
 
     statusText.textContent = "文字起こし中...";
 
-    const result = await transcriber(trimmed, {
+    const result = await transcriber(channelData, {
       language: "japanese",
       task: "transcribe",
       temperature: 0.0,
-      beam_size: 5,
-      best_of: 5
+      beam_size: 5
     });
 
     output.value = result.text;
@@ -157,6 +166,50 @@ stopBtn.onclick = () => {
   stopBtn.disabled = true;
 };
 
+// ===== 日記保存 =====
+saveBtn.onclick = () => {
+  const text = output.value.trim();
+  if (!text) return alert("内容が空です");
+
+  const diary = JSON.parse(localStorage.getItem("diary") || "[]");
+
+  diary.unshift({
+    id: Date.now(),
+    date: new Date().toLocaleString(),
+    text: text
+  });
+
+  localStorage.setItem("diary", JSON.stringify(diary));
+  output.value = "";
+  renderEntries();
+};
+
+// ===== 表示 =====
+function renderEntries() {
+  const diary = JSON.parse(localStorage.getItem("diary") || "[]");
+  entriesDiv.innerHTML = "";
+
+  diary.forEach(entry => {
+    const div = document.createElement("div");
+    div.className = "entry";
+    div.innerHTML = `
+      <small>${entry.date}</small>
+      <p>${entry.text}</p>
+      <button onclick="deleteEntry(${entry.id})">削除</button>
+    `;
+    entriesDiv.appendChild(div);
+  });
+}
+
+window.deleteEntry = function(id) {
+  let diary = JSON.parse(localStorage.getItem("diary") || "[]");
+  diary = diary.filter(entry => entry.id !== id);
+  localStorage.setItem("diary", JSON.stringify(diary));
+  renderEntries();
+};
+
+renderEntries();
 </script>
+
 </body>
 </html>
