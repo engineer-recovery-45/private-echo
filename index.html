@@ -1,280 +1,1099 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PrivateEcho+ Advanced</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;800&family=Noto+Sans+JP:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Noto+Sans+JP:wght@400;700&display=swap');
-        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
-        .recording-pulse { animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
-        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
-        .dark-mode { background-color: #0f172a !important; color: #f8fafc !important; }
-        .dark-mode .card { background-color: #1e293b !important; border-color: #334155 !important; }
-        canvas { width: 100%; height: 60px; border-radius: 8px; }
+        :root {
+            --bg: #f0f0eb;
+            --surface: #ffffff;
+            --surface2: #f7f7f4;
+            --border: #e0ddd6;
+            --text: #1a1814;
+            --text-muted: #8c8880;
+            --accent: #3d5a80;
+            --accent-hover: #2c4a6e;
+            --accent-light: #e8eef5;
+            --positive: #1a6b4a;
+            --positive-bg: #e6f4ed;
+            --negative: #8b2020;
+            --negative-bg: #faeaea;
+            --neutral-bg: #f7f7f4;
+            --red: #c0392b;
+            --red-light: #fce4e1;
+            --select-text: #1a1814;
+        }
+
+        [data-theme="dark"] {
+            --bg: #0d0d0f;
+            --surface: #16161a;
+            --surface2: #1e1e24;
+            --border: #2a2a35;
+            --text: #e8e6e0;
+            --text-muted: #6b6a70;
+            --accent: #7ea8d0;
+            --accent-hover: #9dbfe0;
+            --accent-light: #1e2a38;
+            --positive: #4eca8b;
+            --positive-bg: #0d2018;
+            --negative: #e06c6c;
+            --negative-bg: #1f0f0f;
+            --neutral-bg: #1e1e24;
+            --red: #e05050;
+            --red-light: #2a1212;
+            --select-text: #e8e6e0;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            transition: background-color 0.35s ease, color 0.35s ease;
+        }
+
+        .app-title {
+            font-family: 'Syne', sans-serif;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            color: var(--accent);
+        }
+
+        .mono {
+            font-family: 'DM Mono', monospace;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            transition: background 0.35s ease, border-color 0.35s ease, box-shadow 0.2s ease;
+        }
+
+        .card:hover {
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+
+        [data-theme="dark"] .card:hover {
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+
+        /* ==================== SELECT ==================== */
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            background-color: var(--surface2);
+            color: var(--select-text);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 36px 10px 14px;
+            font-size: 13px;
+            font-family: 'DM Mono', monospace;
+            cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238c8880' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease;
+            width: 100%;
+            outline: none;
+        }
+
+        select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-light);
+        }
+
+        select option {
+            background-color: var(--surface);
+            color: var(--select-text);
+        }
+
+        /* ==================== BUTTONS ==================== */
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 20px;
+            font-family: 'Syne', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            white-space: nowrap;
+        }
+
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-primary:active { transform: scale(0.97); }
+        .btn-primary:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-icon {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: 50%;
+            width: 38px;
+            height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: var(--surface2);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-record {
+            width: 100%;
+            padding: 18px;
+            border-radius: 14px;
+            border: 2px dashed var(--border);
+            background: var(--surface2);
+            color: var(--text-muted);
+            font-family: 'Syne', sans-serif;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: not-allowed;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            letter-spacing: 0.01em;
+        }
+
+        .btn-record.active {
+            background: var(--accent);
+            border: 2px solid var(--accent);
+            color: white;
+            cursor: pointer;
+        }
+
+        .btn-record.active:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+        }
+
+        .btn-record.recording {
+            background: var(--red);
+            border: 2px solid var(--red);
+            color: white;
+            cursor: pointer;
+            animation: recordPulse 2s infinite;
+        }
+
+        .btn-delete {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-family: 'DM Mono', monospace;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: color 0.2s, background 0.2s;
+        }
+
+        .btn-delete:hover {
+            color: var(--red);
+            background: var(--red-light);
+        }
+
+        /* ==================== VIEW TOGGLE ==================== */
+        .view-toggle {
+            display: flex;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 3px;
+            gap: 2px;
+        }
+
+        .view-btn {
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: none;
+            background: none;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: 'DM Mono', monospace;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .view-btn.active {
+            background: var(--surface);
+            color: var(--text);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+
+        [data-theme="dark"] .view-btn.active {
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        }
+
+        /* ==================== CANVAS ==================== */
+        #visualizerContainer {
+            border-radius: 10px;
+            overflow: hidden;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 64px;
+        }
+
+        /* ==================== STATUS BAR ==================== */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            flex-shrink: 0;
+            transition: background 0.3s;
+        }
+
+        .status-dot.online { background: #22c55e; animation: blink 2s infinite; }
+        .status-dot.recording { background: var(--red); animation: blink 0.8s infinite; }
+        .status-dot.processing { background: #f59e0b; animation: blink 1.2s infinite; }
+
+        .status-text {
+            font-family: 'DM Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        /* ==================== DIARY CARDS ==================== */
+        .diary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.2s ease;
+        }
+
+        .diary-card.positive {
+            background: var(--positive-bg);
+            border-color: var(--positive);
+            border-opacity: 0.3;
+        }
+
+        .diary-card.negative {
+            background: var(--negative-bg);
+            border-color: var(--negative);
+            border-opacity: 0.3;
+        }
+
+        .diary-card.neutral {
+            background: var(--neutral-bg);
+        }
+
+        .entry-meta {
+            font-family: 'DM Mono', monospace;
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .entry-text {
+            color: var(--text);
+            line-height: 1.75;
+            font-size: 14px;
+        }
+
+        /* Markdown rendered output */
+        .entry-markdown h1, .entry-markdown h2, .entry-markdown h3 {
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+            margin: 0.8em 0 0.3em;
+            color: var(--text);
+        }
+        .entry-markdown h1 { font-size: 1.3em; }
+        .entry-markdown h2 { font-size: 1.15em; }
+        .entry-markdown h3 { font-size: 1.05em; }
+        .entry-markdown p { margin: 0.4em 0; }
+        .entry-markdown ul, .entry-markdown ol {
+            padding-left: 1.4em;
+            margin: 0.4em 0;
+        }
+        .entry-markdown li { margin: 0.2em 0; }
+        .entry-markdown strong { font-weight: 600; color: var(--text); }
+        .entry-markdown em { font-style: italic; opacity: 0.85; }
+        .entry-markdown code {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.88em;
+        }
+        .entry-markdown blockquote {
+            border-left: 3px solid var(--accent);
+            padding-left: 12px;
+            margin: 0.6em 0;
+            color: var(--text-muted);
+        }
+
+        /* Emotion badge */
+        .emotion-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-family: 'DM Mono', monospace;
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            font-weight: 500;
+        }
+
+        .emotion-badge.positive {
+            background: var(--positive-bg);
+            color: var(--positive);
+            border: 1px solid var(--positive);
+        }
+
+        .emotion-badge.negative {
+            background: var(--negative-bg);
+            color: var(--negative);
+            border: 1px solid var(--negative);
+        }
+
+        .emotion-badge.neutral {
+            background: var(--neutral-bg);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        /* Stats bar */
+        .stat-pill {
+            font-family: 'DM Mono', monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 3px 10px;
+        }
+
+        /* Dark toggle visual */
+        .theme-toggle-track {
+            width: 44px;
+            height: 24px;
+            border-radius: 12px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s, border-color 0.3s;
+        }
+
+        .theme-toggle-track.on {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .theme-toggle-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: white;
+            position: absolute;
+            top: 2px;
+            left: 3px;
+            transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+
+        .theme-toggle-thumb.on { left: 23px; }
+
+        /* Animations */
+        @keyframes recordPulse {
+            0%   { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.5); }
+            50%  { box-shadow: 0 0 0 12px rgba(192, 57, 43, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.3; }
+        }
+
+        @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .diary-card {
+            animation: fadeSlideIn 0.3s ease;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        /* ==================== MIC ERROR BOX ==================== */
+        .mic-error-box {
+            display: none;
+            background: var(--negative-bg);
+            border: 1px solid var(--negative);
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text);
+            position: relative;
+        }
+
+        .mic-error-box code {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.88em;
+        }
+
+        .mic-error-close {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: var(--text-muted);
+            line-height: 1;
+            padding: 2px 4px;
+            border-radius: 4px;
+            transition: color 0.2s;
+        }
+
+        .mic-error-close:hover { color: var(--negative); }
+
+        /* Markdown view toggle label */
+        .md-label {
+            font-family: 'DM Mono', monospace;
+            font-size: 10px;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            background: var(--accent-light);
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            border-radius: 5px;
+            padding: 2px 6px;
+        }
+
+        /* Separator */
+        .sep {
+            height: 1px;
+            background: var(--border);
+            margin: 4px 0;
+        }
+
+        /* Model row */
+        .model-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        /* Progress bar for model load */
+        .progress-bar {
+            height: 3px;
+            border-radius: 2px;
+            background: var(--border);
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.4s ease;
+        }
     </style>
 </head>
-<body class="bg-slate-50 min-h-screen p-4 md:p-8 transition-colors" id="body">
+<body>
 
-<div class="max-w-2xl mx-auto space-y-6">
-    <header class="flex justify-between items-center">
+<div style="max-width: 640px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 20px;">
+
+    <!-- Header -->
+    <header style="display: flex; justify-content: space-between; align-items: center;">
         <div>
-            <h1 class="text-2xl font-black text-indigo-600 tracking-tight">PrivateEcho+</h1>
-            <p id="emotionSummary" class="text-xs text-slate-500 font-medium"></p>
+            <h1 class="app-title" style="font-size: 24px; margin: 0; line-height: 1;">PrivateEcho<span style="color: var(--text-muted);">+</span></h1>
+            <div id="statsPills" style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;"></div>
         </div>
-        <div class="flex gap-2">
-            <button id="darkToggle" class="p-2 border rounded-full hover:bg-white transition-all text-sm">🌙</button>
-            <button id="exportBtn" class="p-2 border rounded-full hover:bg-white transition-all text-sm">📁</button>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <!-- Dark mode toggle -->
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-muted); letter-spacing: 0.05em;" id="themeLabel">LIGHT</span>
+                <div class="theme-toggle-track" id="darkToggle" onclick="toggleTheme()">
+                    <div class="theme-toggle-thumb" id="toggleThumb">☀️</div>
+                </div>
+            </div>
+            <button class="btn-icon" id="exportBtn" title="Markdownでエクスポート">⬇️</button>
         </div>
     </header>
 
-    <section class="card bg-white p-6 rounded-3xl shadow-xl border border-slate-100 space-y-4">
-        <div class="flex gap-2">
-            <select id="modelSelect" class="bg-slate-50 text-sm border-none rounded-lg px-3 py-2 flex-1 focus:ring-2 focus:ring-indigo-500">
-                <option value="Xenova/whisper-tiny">Whisper Tiny (高速)</option>
-                <option value="Xenova/whisper-base" selected>Whisper Base (標準)</option>
-                <option value="Xenova/whisper-small">Whisper Small (高精度)</option>
-            </select>
-            <button id="loadModelBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 transition-all">
-                読込
-            </button>
+    <!-- Main Card -->
+    <div class="card" style="padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+
+        <!-- Model Selector Row -->
+        <div class="model-row">
+            <div style="position: relative; flex: 1;">
+                <select id="modelSelect">
+                    <option value="Xenova/whisper-tiny">Whisper Tiny — 高速</option>
+                    <option value="Xenova/whisper-base" selected>Whisper Base — 標準</option>
+                    <option value="Xenova/whisper-small">Whisper Small — 高精度</option>
+                </select>
+            </div>
+            <button class="btn-primary" id="loadModelBtn" onclick="initAI()">読込</button>
         </div>
 
-        <div id="visualizerContainer" class="hidden">
+        <!-- Progress bar (hidden until loading) -->
+        <div class="progress-bar" id="progressBar" style="display: none;">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+
+        <!-- Canvas visualizer -->
+        <div id="visualizerContainer" style="display: none;">
             <canvas id="canvas"></canvas>
         </div>
 
-        <button id="recordBtn" disabled class="w-full py-4 rounded-2xl bg-slate-200 text-slate-500 font-bold text-lg transition-all flex items-center justify-center gap-2">
-            <span>🎙 モデルを読み込んでください</span>
+        <!-- Record Button -->
+        <button class="btn-record" id="recordBtn" disabled onclick="toggleRecording()">
+            <span style="font-size: 20px;">🎙</span>
+            <span id="recordLabel">モデルを読み込んでください</span>
         </button>
-        
-        <div id="status" class="text-[10px] uppercase tracking-widest text-slate-400 text-center font-bold">System Ready</div>
-    </section>
 
-    <div id="diaryList" class="space-y-4"></div>
+        <!-- Mic error box -->
+        <div class="mic-error-box" id="micErrorBox">
+            <button class="mic-error-close" onclick="hideMicError()">✕</button>
+        </div>
+
+        <!-- Status bar -->
+        <div class="status-bar">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-text" id="statusText">System Ready</span>
+        </div>
+    </div>
+
+    <!-- View & Markdown Toggle -->
+    
+    <!-- View & Markdown Toggle -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 2px;">
+        <span style="font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600; color: var(--text-muted);">記録</span>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span id="mdToggleLabel" style="font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-muted); letter-spacing: 0.05em;">MARKDOWN</span>
+            <div class="theme-toggle-track" id="mdToggle" onclick="toggleMarkdown()" title="Markdown表示を切り替え">
+                <div class="theme-toggle-thumb" id="mdThumb">📝</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Diary List -->
+    <div id="diaryList" style="display: flex; flex-direction: column; gap: 14px;"></div>
+
+    <div id="emptyState" style="text-align: center; padding: 60px 20px; display: none;">
+        <p style="font-family: 'DM Mono', monospace; font-size: 12px; color: var(--text-muted); letter-spacing: 0.1em; text-transform: uppercase;">No entries yet</p>
+        <p style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">録音してはじめてみましょう</p>
+    </div>
 </div>
 
 <script>
-// --- データベース設定 ---
+// ========== DB ==========
 const db = new Dexie("PrivateEchoDB");
 db.version(1).stores({ entries: '++id, timestamp, text, emotion, score' });
 
-// --- 状態管理 ---
+// ========== STATE ==========
 let transcriber = null;
 let recorder = null;
 let chunks = [];
 let audioCtx = null;
 let analyser = null;
 let animationId = null;
+let isMarkdown = false;
+let isDark = false;
+let progressInterval = null;
 
-// --- 感情分析エンジン (強化版) ---
+// ========== EMOTION DICT ==========
 const EMOTION_DICT = {
     positive: {
-        words: ["嬉しい", "楽しい", "最高", "幸せ", "感謝", "できた", "成功", "面白い", "ワクワク", "好き", "感動", "満足", "充実", "リラックス", "素晴らしい", "絶好調", "いい感じ", "笑"],
+        words: ["嬉しい","楽しい","最高","幸せ","感謝","できた","成功","面白い","ワクワク","好き","感動","満足","充実","リラックス","素晴らしい","絶好調","いい感じ","笑","良かった","ありがとう","うれしい","たのしい","やった","いい","気持ちいい"],
         score: 1
     },
     negative: {
-        words: ["辛い", "疲れた", "最悪", "悲しい", "苦しい", "怒り", "失敗", "不安", "嫌だ", "だるい", "落ち込む", "ショック", "寂しい", "イライラ", "ダメ", "後悔", "死ぬ", "酷い"],
+        words: ["辛い","疲れた","最悪","悲しい","苦しい","怒り","失敗","不安","嫌だ","だるい","落ち込む","ショック","寂しい","イライラ","ダメ","後悔","死ぬ","酷い","つらい","しんどい","むかつく","めんどくさい","やばい","ひどい"],
         score: -1
     }
 };
 
 function analyzeEmotion(text) {
     let score = 0;
-    EMOTION_DICT.positive.words.forEach(w => { if(text.includes(w)) score += 1; });
-    EMOTION_DICT.negative.words.forEach(w => { if(text.includes(w)) score -= 1; });
-    
-    // 文末の否定（〜ない）を簡易チェック
-    if (text.includes("くない") || text.includes("じゃない") || text.includes("なかった")) {
-        score *= -0.5; // スコアを反転・減衰させる
+    EMOTION_DICT.positive.words.forEach(w => { if (text.includes(w)) score += 1; });
+    EMOTION_DICT.negative.words.forEach(w => { if (text.includes(w)) score -= 1; });
+    if (text.includes("くない") || text.includes("じゃない") || text.includes("なかった") || text.includes("ません")) {
+        score *= -0.5;
     }
-
-    if (score > 0.5) return { label: "positive", emoji: "✨", score };
-    if (score < -0.5) return { label: "negative", emoji: "💧", score };
-    return { label: "neutral", emoji: "☁️", score };
+    if (score > 0.5)  return { label: "positive", emoji: "✨", badge: "POSITIVE" };
+    if (score < -0.5) return { label: "negative", emoji: "💧", badge: "NEGATIVE" };
+    return { label: "neutral", emoji: "☁️", badge: "NEUTRAL" };
 }
 
-// --- ビジュアライザー描画 ---
+// ========== THEME ==========
+function toggleTheme() {
+    isDark = !isDark;
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    const track = document.getElementById('darkToggle');
+    const thumb = document.getElementById('toggleThumb');
+    const label = document.getElementById('themeLabel');
+    track.classList.toggle('on', isDark);
+    thumb.classList.toggle('on', isDark);
+    thumb.textContent = isDark ? '🌙' : '☀️';
+    label.textContent = isDark ? 'DARK' : 'LIGHT';
+}
+
+// ========== MARKDOWN TOGGLE ==========
+function toggleMarkdown() {
+    isMarkdown = !isMarkdown;
+    const track = document.getElementById('mdToggle');
+    const thumb = document.getElementById('mdThumb');
+    const label = document.getElementById('mdToggleLabel');
+    track.classList.toggle('on', isMarkdown);
+    thumb.classList.toggle('on', isMarkdown);
+    thumb.textContent = isMarkdown ? '✅' : '📝';
+    label.textContent = isMarkdown ? 'MARKDOWN ON' : 'MARKDOWN';
+    render();
+}
+
+// ========== STATUS ==========
+function setStatus(msg, type = 'idle') {
+    document.getElementById('statusText').textContent = msg;
+    const dot = document.getElementById('statusDot');
+    dot.className = 'status-dot';
+    if (type === 'online') dot.classList.add('online');
+    if (type === 'recording') dot.classList.add('recording');
+    if (type === 'processing') dot.classList.add('processing');
+}
+
+// ========== VISUALIZER ==========
 function drawVisualizer() {
+    const container = document.getElementById('visualizerContainer');
     const canvas = document.getElementById('canvas');
+    container.style.display = 'block';
+
+    // display:block後に実サイズを取得してcanvas解像度を設定
+    const dpr = window.devicePixelRatio || 1;
+    const W = container.clientWidth || 580;
+    const H = 64;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+
     const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    
+
     function draw() {
         animationId = requestAnimationFrame(draw);
         analyser.getByteFrequencyData(dataArray);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#6366f1';
-        const barWidth = (canvas.width / dataArray.length) * 2.5;
-        let x = 0;
-        for(let i = 0; i < dataArray.length; i++) {
-            const barHeight = (dataArray[i] / 255) * canvas.height;
-            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-            x += barWidth + 1;
+        ctx.clearRect(0, 0, W, H);
+
+        const barCount = 64;
+        const gap = 2;
+        const barW = (W - gap * (barCount - 1)) / barCount;
+        const step = Math.floor(dataArray.length / barCount);
+        const accentColor = isDark ? '#7ea8d0' : '#3d5a80';
+
+        for (let i = 0; i < barCount; i++) {
+            const val = dataArray[i * step] / 255;
+            const barH = Math.max(3, val * H * 0.9);
+            const x = i * (barW + gap);
+            const y = (H - barH) / 2;
+
+            ctx.globalAlpha = 0.25 + val * 0.75;
+            ctx.fillStyle = accentColor;
+            ctx.beginPath();
+            ctx.roundRect(x, y, barW, barH, 2);
+            ctx.fill();
         }
+        ctx.globalAlpha = 1;
     }
     draw();
 }
 
-// --- AI 初期化 ---
+function stopVisualizer() {
+    cancelAnimationFrame(animationId);
+    animationId = null;
+    document.getElementById('visualizerContainer').style.display = 'none';
+}
+
+function showMicError(html) {
+    const el = document.getElementById('micErrorBox');
+    el.innerHTML = html;
+    el.style.display = 'block';
+}
+
+function hideMicError() {
+    document.getElementById('micErrorBox').style.display = 'none';
+}
+
+// ========== AI INIT ==========
 async function initAI() {
-    const btn = document.getElementById("loadModelBtn");
-    const recBtn = document.getElementById("recordBtn");
+    const btn = document.getElementById('loadModelBtn');
     btn.disabled = true;
-    updateStatus("Model Downloading...");
-    
+    btn.textContent = '...';
+
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    progressBar.style.display = 'block';
+    progressFill.style.width = '10%';
+    setStatus('Model Downloading...', 'processing');
+
+    // Animate progress during download
+    let prog = 10;
+    progressInterval = setInterval(() => {
+        prog = Math.min(prog + Math.random() * 8, 85);
+        progressFill.style.width = prog + '%';
+    }, 600);
+
     try {
         const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js');
         env.allowLocalModels = false;
-        
-        transcriber = await pipeline('automatic-speech-recognition', document.getElementById("modelSelect").value);
-        
-        updateStatus("AI Engine Online");
+        transcriber = await pipeline('automatic-speech-recognition', document.getElementById('modelSelect').value);
+
+        clearInterval(progressInterval);
+        progressFill.style.width = '100%';
+        setTimeout(() => { progressBar.style.display = 'none'; }, 600);
+
+        setStatus('AI Engine Online', 'online');
+        const recBtn = document.getElementById('recordBtn');
         recBtn.disabled = false;
-        recBtn.classList.replace("bg-slate-200", "bg-indigo-600");
-        recBtn.classList.replace("text-slate-500", "text-white");
-        recBtn.innerHTML = "🎙 録音を開始する";
-        btn.innerText = "OK";
+        recBtn.classList.add('active');
+        document.getElementById('recordLabel').textContent = '録音を開始する';
+        btn.textContent = '✓ OK';
+        btn.style.background = '#22c55e';
     } catch (e) {
-        updateStatus("Error: " + e.message);
+        clearInterval(progressInterval);
+        progressBar.style.display = 'none';
+        setStatus('Error: ' + e.message, 'idle');
+        btn.disabled = false;
+        btn.textContent = '再試行';
     }
 }
 
-// --- 録音制御 ---
+// ========== RESAMPLE (Core Fix) ==========
+// Whisper requires 16000 Hz audio. Browser AudioContext is typically 44100 or 48000 Hz.
+// This function converts arbitrary sample rate Float32Array → 16000 Hz Float32Array.
+function resampleTo16kHz(audioData, originalSampleRate) {
+    if (originalSampleRate === 16000) return audioData;
+
+    const targetRate = 16000;
+    const ratio = originalSampleRate / targetRate;
+    const newLength = Math.round(audioData.length / ratio);
+    const result = new Float32Array(newLength);
+
+    for (let i = 0; i < newLength; i++) {
+        const srcIdx = i * ratio;
+        const lo = Math.floor(srcIdx);
+        const hi = Math.min(lo + 1, audioData.length - 1);
+        const frac = srcIdx - lo;
+        result[i] = audioData[lo] * (1 - frac) + audioData[hi] * frac;
+    }
+    return result;
+}
+
+// ========== RECORDING ==========
 async function toggleRecording() {
-    if (recorder && recorder.state === "recording") {
+    if (recorder && recorder.state === 'recording') {
         recorder.stop();
         stopVisualizer();
         return;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // HTTPS / localhost 以外では getUserMedia が使えない
+    if (location.protocol === 'file:') {
+        setStatus('⚠ file:// では動作しません。HTTPSかlocalhostで開いてください', 'idle');
+        showMicError('このページは <code>file://</code> で開かれています。<br>マイクを使うには <strong>HTTPS</strong> または <strong>localhost</strong> で提供する必要があります。<br><br>例: <code>npx serve .</code> でローカルサーバーを起動してください。');
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('⚠ このブラウザはマイクをサポートしていません', 'idle');
+        showMicError('お使いのブラウザは <code>getUserMedia</code> をサポートしていません。<br>Chrome / Edge / Firefox の最新版をお試しください。');
+        return;
+    }
+
+    let stream;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        const name = e.name || '';
+        let msg = 'マイクへのアクセスに失敗しました';
+        let detail = e.message || name;
+        if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+            msg = 'マイクの許可が拒否されました';
+            detail = 'ブラウザのアドレスバー横にある 🎙 アイコンをクリックして「許可」してください。';
+        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+            msg = 'マイクが見つかりません';
+            detail = 'マイクが接続されているか確認してください。';
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            msg = 'マイクが使用中です';
+            detail = '別のアプリがマイクを使用しています。閉じてから再試行してください。';
+        } else if (name === 'OverconstrainedError') {
+            msg = 'マイク設定エラー';
+            detail = '要求した音声形式に対応していません。';
+        }
+        setStatus('⚠ ' + msg, 'idle');
+        showMicError(`<strong>${msg}</strong><br><br>${detail}`);
+        return;
+    }
+
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
     const source = audioCtx.createMediaStreamSource(stream);
     source.connect(analyser);
-    
-    document.getElementById("visualizerContainer").classList.remove("hidden");
-    drawVisualizer();
 
-    recorder = new MediaRecorder(stream);
+    drawVisualizer();
+    hideMicError();
+
+    recorder = new MediaRecorder(stream, { mimeType: getSupportedMimeType() });
     chunks = [];
-    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     recorder.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
-        processAudio();
+        await processAudio();
     };
 
-    recorder.start();
-    updateStatus("Listening...");
-    const rb = document.getElementById("recordBtn");
-    rb.innerHTML = "⏹ 録音を終了";
-    rb.classList.add("recording-pulse", "bg-red-500");
+    recorder.start(100);
+    setStatus('Listening...', 'recording');
+
+    const recBtn = document.getElementById('recordBtn');
+    recBtn.classList.remove('active');
+    recBtn.classList.add('recording');
+    document.getElementById('recordLabel').textContent = '録音を終了する';
 }
 
-function stopVisualizer() {
-    cancelAnimationFrame(animationId);
-    document.getElementById("visualizerContainer").classList.add("hidden");
+function getSupportedMimeType() {
+    const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg', 'audio/mp4', ''];
+    return types.find(t => !t || MediaRecorder.isTypeSupported(t)) || '';
 }
 
 async function processAudio() {
-    updateStatus("Transcribing...");
-    const blob = new Blob(chunks, { type: 'audio/webm' });
-    const buffer = await blob.arrayBuffer();
-    const decoded = await audioCtx.decodeAudioData(buffer);
-    const audioData = decoded.getChannelData(0);
+    setStatus('Transcribing...', 'processing');
 
-    const result = await transcriber(audioData, { 
-        language: 'japanese',
-        task: 'transcribe',
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        repetition_penalty: 1.2 // 繰り返しを抑制
-    });
+    const recBtn = document.getElementById('recordBtn');
+    recBtn.classList.remove('recording');
+    recBtn.classList.add('active');
+    document.getElementById('recordLabel').textContent = '変換中...';
+    recBtn.disabled = true;
 
-    const text = result.text.trim();
-    if(text) {
-        const emotionData = analyzeEmotion(text);
-        await db.entries.add({
-            timestamp: Date.now(),
-            text: text,
-            emotion: emotionData.label,
-            score: emotionData.score
+    try {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const arrayBuffer = await blob.arrayBuffer();
+
+        // Decode audio at native sample rate
+        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+        // Get mono channel data
+        const rawAudio = decoded.getChannelData(0);
+
+        // ★★★ CORE FIX: Resample to 16kHz before passing to Whisper ★★★
+        const audio16k = resampleTo16kHz(rawAudio, decoded.sampleRate);
+
+        const result = await transcriber(audio16k, {
+            language: 'japanese',
+            task: 'transcribe',
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            return_timestamps: false
         });
-        render();
+
+        const text = result.text.trim();
+
+        if (text && text.length > 0) {
+            const emotionData = analyzeEmotion(text);
+            await db.entries.add({
+                timestamp: Date.now(),
+                text,
+                emotion: emotionData.label,
+                score: 0
+            });
+            render();
+            setStatus('Saved ✓', 'online');
+        } else {
+            setStatus('No speech detected', 'online');
+        }
+    } catch (e) {
+        console.error(e);
+        setStatus('Error: ' + e.message, 'idle');
     }
-    
-    updateStatus("Saved");
-    resetRecordBtn();
+
+    recBtn.disabled = false;
+    document.getElementById('recordLabel').textContent = '録音を開始する';
 }
 
-function resetRecordBtn() {
-    const rb = document.getElementById("recordBtn");
-    rb.innerHTML = "🎙 録音を開始する";
-    rb.classList.remove("recording-pulse", "bg-red-500");
-    rb.classList.add("bg-indigo-600");
-}
-
-function updateStatus(msg) {
-    document.getElementById("status").innerText = msg;
-}
-
-// --- レンダリング ---
+// ========== RENDER ==========
 async function render() {
-    const entries = await db.entries.orderBy("timestamp").reverse().toArray();
-    const list = document.getElementById("diaryList");
-    list.innerHTML = "";
+    const entries = await db.entries.orderBy('timestamp').reverse().toArray();
+    const list = document.getElementById('diaryList');
+    const emptyState = document.getElementById('emptyState');
+    list.innerHTML = '';
 
-    let stats = { positive: 0, negative: 0, neutral: 0 };
-    
+    if (entries.length === 0) {
+        emptyState.style.display = 'block';
+        updateStats([]);
+        return;
+    }
+
+    emptyState.style.display = 'none';
+    const stats = { positive: 0, negative: 0, neutral: 0 };
+
     entries.forEach(e => {
-        stats[e.emotion]++;
-        const card = document.createElement("div");
-        const emoji = analyzeEmotion(e.text).emoji;
-        const bgColor = e.emotion === 'positive' ? 'bg-emerald-50' : (e.emotion === 'negative' ? 'bg-rose-50' : 'bg-white');
-        
-        card.className = `card p-5 rounded-2xl border border-slate-100 ${bgColor} shadow-sm transition-all hover:shadow-md`;
+        stats[e.emotion] = (stats[e.emotion] || 0) + 1;
+        const emotion = analyzeEmotion(e.text);
+
+        const card = document.createElement('div');
+        card.className = `diary-card ${e.emotion}`;
+
+        const dateStr = new Date(e.timestamp).toLocaleString('ja-JP', {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+
+        let textContent;
+        if (isMarkdown) {
+            const rendered = marked.parse(e.text);
+            textContent = `<div class="entry-text entry-markdown">${rendered}</div>`;
+        } else {
+            textContent = `<p class="entry-text">${escapeHtml(e.text)}</p>`;
+        }
+
         card.innerHTML = `
-            <div class="flex justify-between items-start mb-3">
-                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${new Date(e.timestamp).toLocaleString()}</span>
-                <span class="text-xl">${emoji}</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span class="entry-meta">${dateStr}</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="emotion-badge ${e.emotion}">${emotion.emoji} ${emotion.badge}</span>
+                </div>
             </div>
-            <p class="text-slate-700 leading-relaxed text-sm font-medium">${e.text}</p>
-            <button onclick="deleteEntry(${e.id})" class="mt-4 text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest">Delete</button>
+            ${textContent}
+            <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
+                <button class="btn-delete" onclick="deleteEntry(${e.id})">DELETE</button>
+            </div>
         `;
         list.appendChild(card);
     });
 
-    document.getElementById("emotionSummary").innerText = `POS ${stats.positive} / NEU ${stats.neutral} / NEG ${stats.negative}`;
+    updateStats(stats);
+}
+
+function updateStats(stats) {
+    const el = document.getElementById('statsPills');
+    const total = (stats.positive || 0) + (stats.neutral || 0) + (stats.negative || 0);
+    if (total === 0) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+        <span class="stat-pill">POS ${stats.positive || 0}</span>
+        <span class="stat-pill">NEU ${stats.neutral || 0}</span>
+        <span class="stat-pill">NEG ${stats.negative || 0}</span>
+    `;
+}
+
+function escapeHtml(text) {
+    return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 async function deleteEntry(id) {
-    if(confirm("削除しますか？")) {
+    if (confirm('このエントリを削除しますか？')) {
         await db.entries.delete(id);
         render();
     }
 }
 
-// --- イベント ---
-document.getElementById("loadModelBtn").onclick = initAI;
-document.getElementById("recordBtn").onclick = toggleRecording;
-document.getElementById("darkToggle").onclick = () => {
-    document.body.classList.toggle("dark-mode");
-};
-document.getElementById("exportBtn").onclick = async () => {
-    const data = await db.entries.toArray();
-    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+// ========== EXPORT (Markdown) ==========
+document.getElementById('exportBtn').onclick = async () => {
+    const entries = await db.entries.orderBy('timestamp').toArray();
+    if (entries.length === 0) {
+        alert('エクスポートするエントリがありません');
+        return;
+    }
+
+    const EMOTION_LABEL = { positive: '✨ Positive', negative: '💧 Negative', neutral: '☁️ Neutral' };
+
+    let md = '# PrivateEcho+ — 日記エクスポート\n\n';
+    md += `> エクスポート日時: ${new Date().toLocaleString('ja-JP')}\n`;
+    md += `> 合計: ${entries.length}件\n\n`;
+    md += '---\n\n';
+
+    entries.forEach((e, idx) => {
+        const dateStr = new Date(e.timestamp).toLocaleString('ja-JP', {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+        const emotionLabel = EMOTION_LABEL[e.emotion] || '☁️ Neutral';
+        md += `## エントリ ${idx + 1}\n\n`;
+        md += `- **日時:** ${dateStr}\n`;
+        md += `- **感情:** ${emotionLabel}\n\n`;
+        md += `${e.text}\n\n`;
+        md += '---\n\n';
+    });
+
+    const blob = new Blob([md], { type: 'text/markdown; charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'diary-export.json';
+    a.download = `privateecho-${new Date().toISOString().slice(0,10)}.md`;
     a.click();
+    URL.revokeObjectURL(url);
 };
 
+// ========== INIT ==========
 render();
 </script>
 </body>
 </html>
+
